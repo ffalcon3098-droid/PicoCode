@@ -1,0 +1,129 @@
+{
+  "schema_version": "0.1.0",
+  "engine_releases": {
+    "llama_cpp_tag": "b12720",
+    "win_vulkan_x64": {
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12720/llama-b12720-bin-win-vulkan-x64.zip",
+      "desc": "Official llama.cpp b12720 Win64 Vulkan (37.3 MB — AMD/Intel/NVIDIA, supports Inkling 2 + DSpark + Vision)"
+    },
+    "win_cuda_12_4_x64": {
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12720/llama-b12720-bin-win-cuda-12.4-x64.zip",
+      "cudart_url": "https://github.com/ggml-org/llama.cpp/releases/download/b12720/cudart-llama-bin-win-cuda-12.4-x64.zip",
+      "desc": "Official llama.cpp b12720 Win64 CUDA 12.4 (NVIDIA)"
+    }
+  },
+  "files": {
+    "inkling2_mini_q4km": {
+      "path": "models/inkling2/Inkling-2-Mini-UD-Q4_K_M.gguf",
+      "expected_bytes": 16610544608,
+      "url": "https://huggingface.co/unsloth/Inkling-2-Mini-GGUF/resolve/main/Inkling-2-Mini-UD-Q4_K_M.gguf",
+      "license": "apache-2.0",
+      "desc": "Inkling 2 Mini 26.4B/3.4B Looped MoE (UD-Q4_K_M, 15.47 GiB, coding + reasoning + multimodal)"
+    },
+    "inkling2_mini_iq4xs": {
+      "path": "models/inkling2/Inkling-2-Mini-UD-IQ4_XS.gguf",
+      "expected_bytes": 15733756512,
+      "url": "https://huggingface.co/unsloth/Inkling-2-Mini-GGUF/resolve/main/Inkling-2-Mini-UD-IQ4_XS.gguf",
+      "license": "apache-2.0",
+      "desc": "Inkling 2 Mini 26.4B/3.4B Looped MoE Compact (UD-IQ4_XS, 14.65 GiB)"
+    },
+    "inkling2_mini_dspark": {
+      "path": "models/inkling2/dspark-Inkling-2-Mini-Q8_0.gguf",
+      "expected_bytes": 503889952,
+      "url": "https://huggingface.co/unsloth/Inkling-2-Mini-GGUF/resolve/main/dspark-Inkling-2-Mini-Q8_0.gguf",
+      "license": "apache-2.0",
+      "desc": "Inkling 2 Mini DSpark Block-Drafting Model (Q8_0, 0.47 GiB, speculative speedup)"
+    },
+    "inkling2_mini_mmproj_q8": {
+      "path": "models/inkling2/mmproj-Inkling-2-Mini-Q8_0.gguf",
+      "expected_bytes": 345910944,
+      "url": "https://huggingface.co/ggml-org/Inkling-2-Mini-GGUF/resolve/main/mmproj-Inkling-2-Mini-Q8_0.gguf",
+      "license": "apache-2.0",
+      "desc": "Inkling 2 Mini Vision Projector (Q8_0, 0.32 GiB, screenshot/UI reading)"
+    },
+    "qwen3_coder_30b_iq4xs": {
+      "path": "models/qwen3/Qwen3-Coder-30B-A3B-Instruct-IQ4_XS.gguf",
+      "expected_bytes": 16378076320,
+      "url": "https://huggingface.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF/resolve/main/Qwen3-Coder-30B-A3B-Instruct-IQ4_XS.gguf",
+      "license": "apache-2.0",
+      "desc": "Qwen3-Coder-30B-A3B-Instruct MoE (IQ4_XS, 15.25 GiB, 3B active, pure coding)"
+    },
+    "qwen25_coder_7b_q4km": {
+      "path": "models/qwen25/qwen2.5-coder-7b-instruct-q4_k_m.gguf",
+      "expected_bytes": 4683073536,
+      "url": "https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/qwen2.5-coder-7b-instruct-q4_k_m.gguf",
+      "license": "apache-2.0",
+      "desc": "Qwen2.5-Coder-7B-Instruct Dense (Q4_K_M, 4.36 GiB, fits 100% inside 6 GB VRAM)"
+    }
+  },
+  "models": {
+    "inkling2-mini": {
+      "label": "Inkling 2 Mini (26.4B / 3.4B Looped MoE · Vision + DSpark)",
+      "arch": "moe_looped",
+      "model_file": "inkling2_mini_q4km",
+      "compact_file": "inkling2_mini_iq4xs",
+      "draft_file": "inkling2_mini_dspark",
+      "draft_spec_type": "draft-dspark",
+      "draft_n_max": 6,
+      "mmproj_file": "inkling2_mini_mmproj_q8",
+      "moe_cpu_mode": "cpu_moe",
+      "defaults": {
+        "ctx_size_6gb": 16384,
+        "ctx_size_8gb": 32768,
+        "ctx_size_4gb": 8192,
+        "temp": 0.6,
+        "top_p": 0.95,
+        "min_p": 0.01
+      }
+    },
+    "qwen3-coder-30b": {
+      "label": "Qwen3-Coder-30B-A3B (30B / 3B MoE · Pure Coding)",
+      "arch": "moe",
+      "model_file": "qwen3_coder_30b_iq4xs",
+      "moe_cpu_mode": "cpu_moe",
+      "defaults": {
+        "ctx_size_6gb": 32768,
+        "ctx_size_8gb": 65536,
+        "ctx_size_4gb": 16384,
+        "temp": 0.4,
+        "top_p": 0.9,
+        "min_p": 0.05
+      }
+    },
+    "qwen25-coder-7b": {
+      "label": "Qwen2.5-Coder-7B (Dense · 100% GPU Ultra-Fast)",
+      "arch": "dense_small",
+      "model_file": "qwen25_coder_7b_q4km",
+      "defaults": {
+        "ctx_size_6gb": 16384,
+        "ctx_size_8gb": 32768,
+        "ctx_size_4gb": 8192,
+        "temp": 0.3,
+        "top_p": 0.9,
+        "min_p": 0.05
+      }
+    }
+  },
+  "download_profiles": {
+    "inkling2-mini": {
+      "desc": "Inkling 2 Mini Q4_K_M + DSpark + Vision (16.26 GiB · 6GB VRAM + 32GB RAM recommended)",
+      "required": ["inkling2_mini_q4km", "inkling2_mini_dspark", "inkling2_mini_mmproj_q8"],
+      "optional": []
+    },
+    "inkling2-compact": {
+      "desc": "Inkling 2 Mini IQ4_XS + DSpark + Vision (15.44 GiB · lower disk/RAM)",
+      "required": ["inkling2_mini_iq4xs", "inkling2_mini_dspark", "inkling2_mini_mmproj_q8"],
+      "optional": []
+    },
+    "qwen3-coder": {
+      "desc": "Qwen3-Coder-30B-A3B MoE IQ4_XS (15.25 GiB · 6GB VRAM + 32GB RAM)",
+      "required": ["qwen3_coder_30b_iq4xs"],
+      "optional": []
+    },
+    "starter-7b": {
+      "desc": "Qwen2.5-Coder-7B Q4_K_M (4.36 GiB · 4-6GB VRAM + 16GB RAM)",
+      "required": ["qwen25_coder_7b_q4km"],
+      "optional": []
+    }
+  }
+}

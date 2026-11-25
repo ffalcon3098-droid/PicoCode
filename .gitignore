@@ -1,0 +1,10 @@
+# Models & downloaded runtimes (large binaries)
+models/
+engine/
+outputs/
+benchmarks/runs/
+__pycache__/
+*.pyc
+*.log
+*.tmp
+.vscode/
