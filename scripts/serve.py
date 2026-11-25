@@ -116,6 +116,7 @@ def build_server_command(
     use_draft: bool = True,
     use_vision: bool = True,
     n_gpu_layers: int | None = None,
+    reasoning_budget: int | None = None,
     allow_missing_files: bool = False,
 ) -> tuple[list[str], dict[str, Any]]:
     """
@@ -215,10 +216,11 @@ def build_server_command(
     if moe_cpu_offload:
         # --no-op-offload prevents Vulkan/CUDA from allocating a ~7.6 GiB compute scratchpad
         # for CPU MoE tensors (drops GPU VRAM from 9.28 GiB -> 2.55 GiB and speeds up pp 23x!).
-        # --no-host avoids pinning 14.5 GiB in Vulkan_Host shared memory while keeping fast mmap loads.
-        cmd += ["--cpu-moe", "--no-op-offload", "--no-host"]
+        # Note: Do NOT combine --no-host with DSpark draft decoding (causes 3x slowdown due to
+        # unpinned hidden-state transfers); use --no-host only when draft is disabled.
+        cmd += ["--cpu-moe", "--no-op-offload"]
     elif moe_override:
-        cmd += ["-ot", moe_override, "--no-op-offload", "--no-host"]
+        cmd += ["-ot", moe_override, "--no-op-offload"]
 
     # 4. Optional DSpark / Draft model (only if present & enough VRAM)
     draft_active = None
@@ -233,6 +235,12 @@ def build_server_command(
             if mcfg.get("draft_n_max"):
                 cmd += ["--spec-draft-n-max", str(mcfg["draft_n_max"])]
             draft_active = str(dpath)
+
+    if (moe_cpu_offload or moe_override) and not draft_active:
+        cmd += ["--no-host"]
+
+    if reasoning_budget is not None:
+        cmd += ["--reasoning-budget", str(int(reasoning_budget))]
 
     # 5. Optional Vision projector (mmproj)
     vision_active = None
@@ -410,6 +418,7 @@ def main() -> int:
     parser.add_argument("--ngl", type=int, default=None, help="Override -ngl GPU layers")
     parser.add_argument("--no-draft", action="store_true", help="Disable DSpark speculative decoding")
     parser.add_argument("--no-vision", action="store_true", help="Disable mmproj vision projector")
+    parser.add_argument("--reasoning-budget", type=int, default=None, help="Cap <think> tokens (-1=unlimited, 0=off, e.g. 512)")
     parser.add_argument("--bench", action="store_true", help="Run a live coding benchmark and exit")
     parser.add_argument("--max-tokens", type=int, default=192, help="Max tokens for --bench")
     parser.add_argument("--dry-run", action="store_true", help="Print hardware plan & command without starting")
@@ -437,6 +446,7 @@ def main() -> int:
             use_draft=not args.no_draft,
             use_vision=not args.no_vision,
             n_gpu_layers=args.ngl,
+            reasoning_budget=args.reasoning_budget,
             allow_missing_files=args.dry_run,
         )
     except FileNotFoundError as exc:

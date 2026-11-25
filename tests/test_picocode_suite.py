@@ -65,7 +65,7 @@ class TestPicoCodeSuite(unittest.TestCase):
         self.assertEqual(plan["moe_cpu_override"], "--cpu-moe")
         self.assertIn("--cpu-moe", cmd)
         self.assertIn("--no-op-offload", cmd)
-        self.assertIn("--no-host", cmd)
+        self.assertNotIn("--no-host", cmd)  # Never combine --no-host with DSpark
         self.assertIn("-ctk", cmd)
         self.assertIn("q8_0", cmd)
         self.assertIn("--jinja", cmd)
