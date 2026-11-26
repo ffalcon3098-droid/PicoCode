@@ -113,7 +113,7 @@ class TestPicoCodeSuite(unittest.TestCase):
         _, plan_dense = serve.build_server_command(
             "qwen25-coder-7b", hw, self.reg, server_exe="llama-server.exe", allow_missing_files=True
         )
-        self.assertEqual(plan_dense["n_gpu_layers"], 22)
+        self.assertEqual(plan_dense["n_gpu_layers"], 18)
 
     def test_05_24gb_vram_runs_moe_100pct_gpu(self) -> None:
         hw = {

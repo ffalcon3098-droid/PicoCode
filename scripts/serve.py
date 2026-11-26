@@ -177,9 +177,15 @@ def build_server_command(
         else:
             ngl = 99 if ngl is None else ngl
     else:
-        # Dense 7B model (~4.36 GiB)
+        # Dense 7B model (~4.36 GiB): guard against WDDM Shared VRAM thrashing when desktop eats >1.2 GiB
         if ngl is None:
-            ngl = 99 if vram_gib >= 5.5 else 22
+            if vram_gib < 5.5:
+                ngl = 18
+            elif vram_gib <= 6.8 and live_free is not None and float(live_free) < 4.8:
+                # Benchmarked live on RX 5600 XT 6GB with browser open: ngl=20 beats ngl=99 by +60% tg
+                ngl = 20
+            else:
+                ngl = 99
 
     # 3. Flash attention & batching (RDNA1/Vulkan TDR safety)
     fa_mode = flash_attn.lower()
@@ -221,6 +227,8 @@ def build_server_command(
         cmd += ["--cpu-moe", "--no-op-offload"]
     elif moe_override:
         cmd += ["-ot", moe_override, "--no-op-offload"]
+    elif arch == "dense_small" and ngl is not None and ngl < 29:
+        cmd += ["--no-op-offload"]
 
     # 4. Optional DSpark / Draft model (only if present & enough VRAM)
     draft_active = None
