@@ -834,19 +834,22 @@ def run_agent_turn(
                     ),
                 })
             sampling = get_model_sampling_params(model)
-            # Keep intermediate tool-selection thinking crisp on Inkling so reviews stay fast; full budget on final synthesis
-            if "reasoning_budget" in sampling and not force_final and step < max_steps:
-                sampling["reasoning_budget"] = min(int(sampling["reasoning_budget"]), 512)
+            # Keep intermediate tool-selection thinking crisp on Inkling so reviews stay fast
+            if "reasoning_budget" in sampling:
+                if not force_final and step < max_steps:
+                    sampling["reasoning_budget"] = min(int(sampling["reasoning_budget"]), 512)
+                elif force_final:
+                    sampling["reasoning_budget"] = min(int(sampling["reasoning_budget"]), 768)
             payload: dict[str, Any] = {
                 "model": model,
                 "messages": conv,
-                "max_tokens": 4096,
+                # Always keep `tools` identical so llama-server's Jinja prefix stays 100% KV-cached (never wipe 10K ctx!)
+                "tools": tools_spec,
+                "tool_choice": "none" if force_final else "auto",
+                "max_tokens": 2048 if compact_budget else 4096,
                 "stream": True,
                 **sampling,
             }
-            if not force_final:
-                payload["tools"] = tools_spec
-                payload["tool_choice"] = "auto"
             req = urllib.request.Request(
                 url, data=json.dumps(payload).encode("utf-8"),
                 headers={"Content-Type": "application/json", "Authorization": "Bearer picocode"},
