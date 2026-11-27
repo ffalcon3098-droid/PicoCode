@@ -168,8 +168,8 @@ class TestPicoCodeSuite(unittest.TestCase):
         self.assertIn("ngram-mod", cmd)
         self.assertIn("--poll", cmd)
         self.assertIn("--cache-reuse", cmd)
-        self.assertEqual(plan["batch_size"], 2048)
-        self.assertEqual(plan["ubatch_size"], 512)
+        self.assertEqual(plan["batch_size"], 1024)
+        self.assertEqual(plan["ubatch_size"], 256)
 
         # Under heavy desktop VRAM pressure, hybrid MoE gracefully falls back to --cpu-moe without spilling
         hw_tight = dict(hw_free, live_free_ded_gib=2.0)

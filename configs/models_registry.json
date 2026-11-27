@@ -89,8 +89,8 @@
       "moe_layer_mib": 305,
       "base_gpu_mib_32k_q8": 2520,
       "spec_type_default": "ngram-mod",
-      "batch_size_override": 2048,
-      "ubatch_size_override": 512,
+      "batch_size_override": 1024,
+      "ubatch_size_override": 256,
       "defaults": {
         "ctx_size_6gb": 32768,
         "ctx_size_8gb": 65536,

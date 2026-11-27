@@ -952,6 +952,9 @@ def run_agent_turn(
 
             conv.append({"role": "assistant", "content": "".join(step_text) or None, "tool_calls": tool_calls})
             answered_ids: set[str] = set()
+            n_calls = max(1, len(tool_calls))
+            step_char_budget = 6400 if compact_budget else 11000
+            per_call_cap = max(2200, step_char_budget // n_calls) if n_calls > 1 else 0
             try:
                 for tc in tool_calls:
                     fn_name = tc["function"]["name"]
@@ -987,6 +990,11 @@ def run_agent_turn(
                             confirm_fn=_confirm_cmd if ui is not None else None,
                             compact_budget=compact_budget,
                         )
+                        if per_call_cap and fn_name in READONLY_TOOLS and len(res_txt) > per_call_cap:
+                            res_txt = (
+                                res_txt[:per_call_cap].rstrip()
+                                + "\n... [paralel adım bütçesi nedeniyle kırpıldı; devamı için read_file(start_line, end_line) çağırın]"
+                            )
 
                     if chg:
                         turn_undos.append(chg["undo_id"])
