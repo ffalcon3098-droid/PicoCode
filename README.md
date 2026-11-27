@@ -1,10 +1,31 @@
-# PicoCode v0.7.0 — Local 30B Coding LLMs & Claude-Code-Style Terminal Agent on 4–6 GB VRAM PCs
+# PicoCode v0.7.0 — Local 30B Coding LLMs & Claude-Code-Style Terminal Agent on Low-End 4–6 GB GPUs (AMD & NVIDIA)
 
-> [Türkçe dokümantasyon için README.tr.md](README.tr.md)
+[![Regression Tests](https://github.com/ffalcon3098-droid/PicoCode/actions/workflows/tests.yml/badge.svg)](https://github.com/ffalcon3098-droid/PicoCode/actions/workflows/tests.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-**PicoCode** runs frontier sparse Mixture-of-Experts (MoE) and dense local coding models — led by **Qwen3-Coder-30B-A3B (`97.5 tok/s` pp via `--load-mode none` + `18–30 tok/s` tg via Adaptive Hybrid GPU MoE + lossless `ngram-mod`)**, **Inkling 2 Mini (26.4B / 3.4B Looped MoE + DSpark + Vision)**, and **Qwen2.5-Coder-7B** — smoothly on ordinary **4–6 GB VRAM + 32 GB RAM** consumer PCs (AMD Vulkan & NVIDIA CUDA), with **zero C++ compilation**, an **English-first Claude-Code-Style 24-bit TrueColor Terminal Coding Agent (`.\agent.cmd`)**, an **OpenAI-compatible API** for VS Code (Cline, Roo Code, Continue, OpenCode) & **PicoStudio IDE**, and a hardened dark **Web Studio**.
+> [Türkçe dokümantasyon için README.tr.md](README.tr.md) · **Platform:** Windows 10/11 (x64) · **GPUs:** AMD Radeon (Vulkan), NVIDIA GeForce GTX/RTX (CUDA 12.4 & Vulkan), Intel Arc (Vulkan)
+
+**PicoCode** brings frontier 26B–30B Mixture-of-Experts (MoE) and fast 7B local coding models — **Qwen3-Coder-30B-A3B (`97.5 tok/s` pp via `--load-mode none` + `18–30 tok/s` tg via Adaptive Hybrid GPU MoE + lossless `ngram-mod`)**, **Inkling 2 Mini (26.4B / 3.4B Looped MoE + DSpark + Vision)**, and **Qwen2.5-Coder-7B** — to ordinary **4–6 GB VRAM** consumer PCs with **zero C++ compilation**, an **English-first Claude-Code-Style 24-bit TrueColor Terminal Coding Agent (`.\agent.cmd`)**, an **OpenAI-compatible API** for VS Code (Cline, Roo Code, Continue, OpenCode) & **PicoStudio IDE**, and a hardened dark **Web Studio**.
 
 All bundled code and default models are **100% Apache 2.0**.
+
+---
+
+## AMD & NVIDIA GPU Compatibility + Honest Hardware Tiers
+
+PicoCode automatically probes your GPU (`scripts/probe_hardware.py`), downloads the matching prebuilt **`llama.cpp` Vulkan or CUDA 12.4** binary, and tunes layer offloading, KV quantization, and context limits so powerful models run smoothly without OOM crashes:
+
+| GPU Vendor / Models | Backend (Auto-Selected) | Status | Notes |
+|---|---|---|---|
+| **AMD Radeon RX** (RX 5500 XT / **RX 5600 XT 6 GB** / RX 6600 / RX 7600+) | **Vulkan** (`ggml-vulkan`) | **Physically Verified (RX 5600 XT 6 GB)** | Zero ROCm hassle on Windows; prebuilt official `llama.cpp b12807` Vulkan binary. |
+| **NVIDIA GeForce GTX / RTX** (GTX 1650 / 1660 / RTX 2060 / 3050 / 3060 / 4060+) | **CUDA 12.4** (or Vulkan) | **Auto-Configured (`setup.cmd`)** | Auto-detects `nvidia-smi`, downloads official `llama.cpp b12807` CUDA 12.4 + `cudart` DLLs; native FP16 Tensor Core speed. |
+| **Intel Arc** (A380 / A580 / A750 / B580) | **Vulkan** (`ggml-vulkan`) | **Supported via Vulkan** | Uses the same prebuilt Vulkan engine and automatic VRAM budget probing. |
+
+| System Tier (VRAM + System RAM) | Recommended Model | Expected Experience |
+|---|---|---|
+| **4–6 GB VRAM + 16 GB RAM** *(Entry / Low-End)* | `qwen25-coder-7b` (`4.36 GiB`) | Fits **100% inside 6 GB VRAM** (or hybrid on 4 GB) — instant startup, ultra-fast coding & tool-calling. |
+| **6 GB VRAM + 32 GB RAM** *(Sweet Spot — Verified)* | `qwen3-coder-30b` (`15.25 GiB`) & `inkling2-mini` (`16.26 GiB`) | Adaptive Hybrid GPU MoE + `--load-mode none`: **30B/3B coding at `18–30 tok/s`** + Vision + DSpark! |
+| **8 GB+ VRAM + 32 GB RAM** *(RTX 3060/4060 / RX 6600+)* | All models (`32K–64K` ctx) | Even more MoE layers resident on GDDR6 for higher sustained throughput. |
 
 ---
 
@@ -70,10 +91,10 @@ Measured live on Windows 11 with desktop + browser active (`~1.65 GiB` baseline 
 # 3. Or launch Dark Web Studio (http://127.0.0.1:7870)
 .\web-studio.cmd
 
-# 3. Or launch headless OpenAI API server for VS Code (http://127.0.0.1:8080/v1)
+# 4. Or launch headless OpenAI API server for VS Code (http://127.0.0.1:8080/v1)
 .\picocode.cmd --model inkling2-mini
 
-# 4. Run a live coding speed & VRAM benchmark on your own GPU
+# 5. Run a live coding speed & VRAM benchmark on your own GPU
 .\picocode.cmd --model inkling2-mini --bench
 ```
 

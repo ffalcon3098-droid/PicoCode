@@ -76,7 +76,7 @@ except ImportError:
 
 
 SLASH_COMMANDS: list[tuple[str, str]] = [
-    ("/project", "Pick, switch, or create a workspace folder (/project StarForge)"),
+    ("/project", "Pick, switch, or create a workspace folder (/project my-app)"),
     ("/trust", "Manage trusted folders (/trust | /trust add | /trust remove)"),
     ("/files", "Browse files in the active project (/files [subdir])"),
     ("/add", "Pin a file into persistent chat context (/add file.py · Tab)"),

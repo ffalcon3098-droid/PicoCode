@@ -1,10 +1,31 @@
-# PicoCode v0.7.0 — 4–6 GB VRAM Bilgisayarlarda Yerel 30B Kodlama Yapay Zekası & Claude Code Tarzı Terminal Ajanı
+# PicoCode v0.7.0 — Düşük Donanımlı 4–6 GB GPU'larda (AMD & NVIDIA) Yerel 30B Kodlama Yapay Zekası & Terminal Ajanı
 
-> [For English documentation, see README.md](README.md)
+[![Regression Tests](https://github.com/ffalcon3098-droid/PicoCode/actions/workflows/tests.yml/badge.svg)](https://github.com/ffalcon3098-droid/PicoCode/actions/workflows/tests.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-**PicoCode**, **Qwen3-Coder-30B-A3B (`--load-mode none` ile `97.5 tok/s` prompt işleme + Adaptif Hibrit GPU MoE ve kayıpsız `ngram-mod` ile `18–30 tok/s` üretim)**, **Inkling 2 Mini (26.4B / 3.4B Looped MoE + DSpark + Vision)** ve **Qwen2.5-Coder-7B** gibi güncel açık kaynaklı kodlama modellerini sıradan **4–6 GB VRAM + 32 GB RAM** bilgisayarlarda (AMD Vulkan ve NVIDIA CUDA) **sıfır C++ derlemesi**, **İngilizce ana arayüzlü 24-bit TrueColor Terminal Kodlama Ajanı (`.\agent.cmd`)**, **VS Code uyumlu OpenAI API** ve güvenlik sertleştirmeli **Web Studio** ile çalıştırır.
+> [For English documentation, see README.md](README.md) · **Platform:** Windows 10/11 (x64) · **GPU Desteği:** AMD Radeon (Vulkan), NVIDIA GeForce GTX/RTX (CUDA 12.4 & Vulkan), Intel Arc (Vulkan)
+
+**PicoCode**, **Qwen3-Coder-30B-A3B (`--load-mode none` ile `97.5 tok/s` prompt işleme + Adaptif Hibrit GPU MoE ve kayıpsız `ngram-mod` ile `18–30 tok/s` üretim)**, **Inkling 2 Mini (26.4B / 3.4B Looped MoE + DSpark + Vision)** ve **Qwen2.5-Coder-7B** gibi güncel açık kaynaklı kodlama modellerini sıradan **4–6 GB VRAM** bilgisayarlarda **sıfır C++ derlemesi**, **İngilizce ana arayüzlü 24-bit TrueColor Terminal Kodlama Ajanı (`.\agent.cmd`)**, **VS Code uyumlu OpenAI API** ve güvenlik sertleştirmeli **Web Studio** ile çalıştırır.
 
 Tüm proje kodu ve varsayılan modeller **%100 Apache 2.0** lisanslıdır.
+
+---
+
+## AMD & NVIDIA GPU Uyumluluğu + Dürüst Donanım Katmanları
+
+PicoCode ekran kartınızı otomatik algılar (`scripts/probe_hardware.py`), uygun resmi hazır **`llama.cpp` Vulkan veya CUDA 12.4** ikilisini indirir ve katman dağıtımını / KV önbelleğini OOM olmadan en yüksek hıza ayarlar:
+
+| GPU Üreticisi / Modeller | Otomatik Backend | Durum | Notlar |
+|---|---|---|---|
+| **AMD Radeon RX** (RX 5500 XT / **RX 5600 XT 6 GB** / RX 6600 / RX 7600+) | **Vulkan** (`ggml-vulkan`) | **Fiziksel Doğrulandı (RX 5600 XT 6 GB)** | Windows'ta ROCm derdi yok; resmi `llama.cpp b12807` Vulkan motoruyla tak-çalıştır. |
+| **NVIDIA GeForce GTX / RTX** (GTX 1650 / 1660 / RTX 2060 / 3050 / 3060 / 4060+) | **CUDA 12.4** (veya Vulkan) | **Otomatik Kurulum (`setup.cmd`)** | `nvidia-smi` algılar, resmi `llama.cpp b12807` CUDA 12.4 + `cudart` DLL'lerini otomatik indirir. |
+| **Intel Arc** (A380 / A580 / A750 / B580) | **Vulkan** (`ggml-vulkan`) | **Vulkan ile Desteklenir** | Aynı hazır Vulkan ikilisi ve otomatik VRAM bütçesiyle çalışır. |
+
+| Sistem Katmanı (VRAM + Sistem RAM) | Önerilen Model | Beklenen Deneyim |
+|---|---|---|
+| **4–6 GB VRAM + 16 GB RAM** *(Giriş / Düşük Donanım)* | `qwen25-coder-7b` (`4.36 GiB`) | **6 GB VRAM'e %100 sığar** (4 GB'da hibrit) — anlık açılış, çok hızlı kodlama & araç çağrısı. |
+| **6 GB VRAM + 32 GB RAM** *(En İdeal — Ölçüldü)* | `qwen3-coder-30b` (`15.25 GiB`) & `inkling2-mini` (`16.26 GiB`) | Adaptif Hibrit GPU MoE + `--load-mode none`: **`18–30 tok/s` 30B/3B kodlama** + Vision + DSpark! |
+| **8 GB+ VRAM + 32 GB RAM** *(RTX 3060/4060 / RX 6600+)* | Tüm modeller (`32K–64K` bağlam) | Daha fazla MoE katmanı GDDR6'da tutulur, daha yüksek hız elde edilir. |
 
 ---
 
@@ -70,10 +91,10 @@ Windows 11 üzerinde masaüstü + tarayıcı açıkken (`~1.65 GiB` taban Dedica
 # 3. Veya karanlık Web Studio arayüzünü aç (http://127.0.0.1:7870)
 .\web-studio.cmd
 
-# 3. Veya VS Code için sadece OpenAI API sunucusunu başlat (http://127.0.0.1:8080/v1)
+# 4. Veya VS Code için sadece OpenAI API sunucusunu başlat (http://127.0.0.1:8080/v1)
 .\picocode.cmd --model inkling2-mini
 
-# 4. Kendi ekran kartınızda canlı hız & VRAM testi çalıştırın
+# 5. Kendi ekran kartınızda canlı hız & VRAM testi çalıştırın
 .\picocode.cmd --model inkling2-mini --bench
 ```
 
