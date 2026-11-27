@@ -102,6 +102,49 @@ def compute_optimal_threads(cpu_threads: int) -> int:
     return max(6, cpu_threads // 2)
 
 
+def compute_hybrid_cpu_moe(
+    mcfg: dict[str, Any],
+    vram_gib: float,
+    live_free_gib: float | None,
+    chosen_ctx: int,
+    kv_type: str = "q8_0",
+) -> tuple[int | None, int]:
+    """Compute optimal `--n-cpu-moe N` (layers kept on CPU) from live free VRAM.
+
+    Returns (n_cpu_moe_or_None_for_all_cpu, gpu_moe_layers).
+    Measured on RX 5600 XT 6GB (Qwen3-Coder-30B-A3B IQ4_XS):
+      - Base (attention + 32K q8_0 KV): ~2520 MiB VRAM
+      - Each MoE expert layer moved from CPU -> GDDR6: ~305 MiB VRAM
+      - Safety margin: 650 MiB to guarantee zero WDDM Shared VRAM thrashing.
+    """
+    total_layers = int(mcfg.get("total_layers") or 0)
+    layer_mib = int(mcfg.get("moe_layer_mib") or 305)
+    if total_layers <= 0 or layer_mib <= 0:
+        return None, 0
+
+    # Estimate available VRAM budget in MiB
+    avail_gib = float(live_free_gib) if live_free_gib is not None else max(0.0, vram_gib - 1.35)
+    avail_mib = avail_gib * 1024.0
+
+    base_32k_q8 = float(mcfg.get("base_gpu_mib_32k_q8") or 2520)
+    # KV cache scales linearly with ctx and ~0.5x for q4_0 vs q8_0 (~1200 MiB KV component at 32K q8_0)
+    kv_32k_q8 = 1200.0
+    kv_scale = (chosen_ctx / 32768.0) * (0.55 if kv_type == "q4_0" else 1.0)
+    base_mib = (base_32k_q8 - kv_32k_q8) + kv_32k_q8 * kv_scale
+    safety_margin_mib = 650.0 if vram_gib <= 8.5 else 1024.0
+
+    headroom = avail_mib - base_mib - safety_margin_mib
+    if headroom < layer_mib:
+        return None, 0
+
+    max_cap = 6 if vram_gib <= 6.8 else total_layers
+    gpu_layers = max(0, min(max_cap, int(headroom // layer_mib)))
+    if gpu_layers <= 0:
+        return None, 0
+    n_cpu = max(0, total_layers - gpu_layers)
+    return n_cpu, gpu_layers
+
+
 def build_server_command(
     model_id: str,
     hw: dict[str, Any],
@@ -113,7 +156,9 @@ def build_server_command(
     ctx_size: int | None = None,
     threads: int | None = None,
     flash_attn: str = "auto",
+    kv_type: str = "q8_0",
     use_draft: bool = True,
+    use_ngram: bool = True,
     use_vision: bool = True,
     n_gpu_layers: int | None = None,
     reasoning_budget: int | None = None,
@@ -162,14 +207,24 @@ def build_server_command(
             )
             chosen_ctx = capped
 
-    # 2. GPU offloading & MoE routed-expert CPU routing
+    # 2. GPU offloading & adaptive hybrid MoE routed-expert CPU/GPU routing
     ngl = n_gpu_layers
     moe_cpu_offload = False
+    moe_n_cpu: int | None = None
+    gpu_moe_layers = 0
     moe_override = None
     if arch in ("moe", "moe_looped"):
         # Full MoE weights (~15-16 GiB) fit on GPU only with 20+ GiB VRAM
         if vram_gib < 20.0:
-            if mcfg.get("moe_cpu_mode", "cpu_moe") == "cpu_moe":
+            mode_moe = mcfg.get("moe_cpu_mode", "cpu_moe")
+            if mode_moe == "hybrid_moe":
+                n_cpu_opt, gpu_l = compute_hybrid_cpu_moe(mcfg, vram_gib, live_free, chosen_ctx, kv_type=kv_type)
+                if n_cpu_opt is not None and gpu_l > 0:
+                    moe_n_cpu = n_cpu_opt
+                    gpu_moe_layers = gpu_l
+                else:
+                    moe_cpu_offload = True
+            elif mode_moe == "cpu_moe":
                 moe_cpu_offload = True
             else:
                 moe_override = mcfg.get("moe_cpu_regex", r"\.ffn_.*_exps\.=CPU")
@@ -187,15 +242,16 @@ def build_server_command(
             else:
                 ngl = 99
 
-    # 3. Flash attention & batching (RDNA1/Vulkan TDR safety)
+    # 3. Flash attention, KV quantization & batching (RDNA1/Vulkan TDR safety)
     fa_mode = flash_attn.lower()
     if fa_mode == "auto":
         fa_mode = "on"
 
-    # Keep ubatch moderate on Vulkan to prevent Windows 2s TDR timeout on long code prefill
-    batch_size = 512 if (backend == "vulkan" or vram_gib <= 6.8) else 1024
-    ubatch_size = 256 if (backend == "vulkan" or vram_gib <= 6.8) else 512
+    # Keep ubatch moderate on Vulkan unless model explicitly verified at higher batch (e.g. Qwen3-Coder 2048/512)
+    batch_size = int(mcfg.get("batch_size_override") or (512 if (backend == "vulkan" or vram_gib <= 6.8) else 1024))
+    ubatch_size = int(mcfg.get("ubatch_size_override") or (256 if (backend == "vulkan" or vram_gib <= 6.8) else 512))
     chosen_threads = int(threads) if threads else compute_optimal_threads(cpu_threads)
+    batch_threads = cpu_threads if mcfg.get("moe_cpu_mode") == "hybrid_moe" else min(cpu_threads, max(chosen_threads, cpu_threads - 1))
 
     cmd = [
         exe_str,
@@ -207,19 +263,23 @@ def build_server_command(
         "-c", str(chosen_ctx),
         "-ngl", str(ngl),
         "-t", str(chosen_threads),
-        "-tb", str(min(cpu_threads, max(chosen_threads, cpu_threads - 1))),
+        "-tb", str(batch_threads),
         "-b", str(batch_size),
         "-ub", str(ubatch_size),
-        "-ctk", "q8_0",
+        "-ctk", kv_type,
         "-fa", fa_mode,
+        "--poll", "100",
+        "--cache-reuse", "256",
         "--jinja",
         "--metrics",
     ]
 
     if fa_mode != "off":
-        cmd += ["-ctv", "q8_0"]
+        cmd += ["-ctv", kv_type]
 
-    if moe_cpu_offload:
+    if moe_n_cpu is not None:
+        cmd += ["--n-cpu-moe", str(moe_n_cpu), "--no-op-offload"]
+    elif moe_cpu_offload:
         # --no-op-offload prevents Vulkan/CUDA from allocating a ~7.6 GiB compute scratchpad
         # for CPU MoE tensors (drops GPU VRAM from 9.28 GiB -> 2.55 GiB and speeds up pp 23x!).
         # Note: Do NOT combine --no-host with DSpark draft decoding (causes 3x slowdown due to
@@ -230,8 +290,9 @@ def build_server_command(
     elif arch == "dense_small" and ngl is not None and ngl < 29:
         cmd += ["--no-op-offload"]
 
-    # 4. Optional DSpark / Draft model (only if present & enough VRAM)
+    # 4. Optional DSpark / Draft model OR zero-VRAM lossless ngram-mod speculative decoding
     draft_active = None
+    spec_active = None
     draft_key = mcfg.get("draft_file")
     if use_draft and draft_key and draft_key in files_map and vram_gib >= 5.0:
         dpath = resolve_path(files_map[draft_key]["path"])
@@ -239,12 +300,17 @@ def build_server_command(
             spec_type = mcfg.get("draft_spec_type")
             if spec_type:
                 cmd += ["--spec-type", str(spec_type)]
+                spec_active = str(spec_type)
             cmd += ["-md", str(dpath), "-ngld", "99"]
             if mcfg.get("draft_n_max"):
                 cmd += ["--spec-draft-n-max", str(mcfg["draft_n_max"])]
             draft_active = str(dpath)
 
-    if (moe_cpu_offload or moe_override) and not draft_active:
+    if not draft_active and use_ngram and mcfg.get("spec_type_default"):
+        spec_active = str(mcfg["spec_type_default"])
+        cmd += ["--spec-type", spec_active]
+
+    if (moe_n_cpu is not None or moe_cpu_offload or moe_override) and not draft_active:
         cmd += ["--no-host"]
 
     if reasoning_budget is not None:
@@ -259,6 +325,11 @@ def build_server_command(
             cmd += ["--mmproj", str(mpath)]
             vision_active = str(mpath)
 
+    moe_desc = (
+        f"--n-cpu-moe {moe_n_cpu} ({gpu_moe_layers} GPU MoE)"
+        if moe_n_cpu is not None
+        else ("--cpu-moe" if moe_cpu_offload else moe_override)
+    )
     plan = {
         "model_id": model_id,
         "label": mcfg["label"],
@@ -270,12 +341,15 @@ def build_server_command(
         "live_free_ded_gib": live_free,
         "ctx_size": chosen_ctx,
         "n_gpu_layers": ngl,
-        "moe_cpu_override": "--cpu-moe" if moe_cpu_offload else moe_override,
+        "moe_cpu_override": moe_desc,
+        "gpu_moe_layers": gpu_moe_layers,
         "threads": chosen_threads,
         "batch_size": batch_size,
         "ubatch_size": ubatch_size,
         "flash_attn": fa_mode,
-        "kv_cache": "q8_0",
+        "kv_cache": kv_type,
+        "spec_type": spec_active,
+        "cache_reuse": 256,
         "draft_model": draft_active,
         "mmproj_model": vision_active,
         "api_base": f"http://{host}:{port}/v1",
@@ -423,8 +497,10 @@ def main() -> int:
     parser.add_argument("--ctx-size", type=int, default=None, help="Override context window (tokens)")
     parser.add_argument("--threads", type=int, default=None, help="Override CPU threads for MoE experts")
     parser.add_argument("--fa", choices=["auto", "on", "off"], default="auto", help="Flash attention mode")
+    parser.add_argument("--kv-type", choices=["q8_0", "q4_0", "f16"], default="q8_0", help="KV cache quantization type (default: q8_0)")
     parser.add_argument("--ngl", type=int, default=None, help="Override -ngl GPU layers")
     parser.add_argument("--no-draft", action="store_true", help="Disable DSpark speculative decoding")
+    parser.add_argument("--no-ngram", action="store_true", help="Disable zero-VRAM lossless ngram-mod speculative decoding")
     parser.add_argument("--no-vision", action="store_true", help="Disable mmproj vision projector")
     parser.add_argument("--reasoning-budget", type=int, default=None, help="Cap <think> tokens (-1=unlimited, 0=off, e.g. 512)")
     parser.add_argument("--bench", action="store_true", help="Run a live coding benchmark and exit")
@@ -451,7 +527,9 @@ def main() -> int:
             ctx_size=args.ctx_size,
             threads=args.threads,
             flash_attn=args.fa,
+            kv_type=args.kv_type,
             use_draft=not args.no_draft,
+            use_ngram=not args.no_ngram,
             use_vision=not args.no_vision,
             n_gpu_layers=args.ngl,
             reasoning_budget=args.reasoning_budget,

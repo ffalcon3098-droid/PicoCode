@@ -1,15 +1,15 @@
 {
   "schema_version": "0.1.0",
   "engine_releases": {
-    "llama_cpp_tag": "b12720",
+    "llama_cpp_tag": "b12807",
     "win_vulkan_x64": {
-      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12720/llama-b12720-bin-win-vulkan-x64.zip",
-      "desc": "Official llama.cpp b12720 Win64 Vulkan (37.3 MB — AMD/Intel/NVIDIA, supports Inkling 2 + DSpark + Vision)"
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12807/llama-b12807-bin-win-vulkan-x64.zip",
+      "desc": "Official llama.cpp b12807 Win64 Vulkan (AMD/Intel/NVIDIA, supports Qwen3 Hybrid MoE + ngram-mod + Inkling 2 + Vision)"
     },
     "win_cuda_12_4_x64": {
-      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12720/llama-b12720-bin-win-cuda-12.4-x64.zip",
-      "cudart_url": "https://github.com/ggml-org/llama.cpp/releases/download/b12720/cudart-llama-bin-win-cuda-12.4-x64.zip",
-      "desc": "Official llama.cpp b12720 Win64 CUDA 12.4 (NVIDIA)"
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12807/llama-b12807-bin-win-cuda-12.4-x64.zip",
+      "cudart_url": "https://github.com/ggml-org/llama.cpp/releases/download/b12807/cudart-llama-bin-win-cuda-12.4-x64.zip",
+      "desc": "Official llama.cpp b12807 Win64 CUDA 12.4 (NVIDIA)"
     }
   },
   "files": {
@@ -77,10 +77,16 @@
       }
     },
     "qwen3-coder-30b": {
-      "label": "Qwen3-Coder-30B-A3B (30B / 3B MoE · Pure Coding)",
+      "label": "Qwen3-Coder-30B-A3B (30B / 3B MoE · Hybrid GPU + ngram-mod)",
       "arch": "moe",
       "model_file": "qwen3_coder_30b_iq4xs",
-      "moe_cpu_mode": "cpu_moe",
+      "moe_cpu_mode": "hybrid_moe",
+      "total_layers": 48,
+      "moe_layer_mib": 305,
+      "base_gpu_mib_32k_q8": 2520,
+      "spec_type_default": "ngram-mod",
+      "batch_size_override": 2048,
+      "ubatch_size_override": 512,
       "defaults": {
         "ctx_size_6gb": 32768,
         "ctx_size_8gb": 65536,

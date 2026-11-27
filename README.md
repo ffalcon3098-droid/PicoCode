@@ -1,8 +1,8 @@
-# PicoCode v0.1.0 — Frontier Local Coding LLMs on 4–6 GB VRAM PCs
+# PicoCode v0.2.0 — 30 tok/s Frontier 30B Local Coding LLMs on 4–6 GB VRAM PCs
 
 > [Türkçe dokümantasyon için README.tr.md](README.tr.md)
 
-**PicoCode** runs frontier sparse Mixture-of-Experts (MoE) and dense local coding models — led by **Inkling 2 Mini (26.4B total / 3.4B active Looped MoE + DSpark + Vision)**, **Qwen3-Coder-30B-A3B**, and **Qwen2.5-Coder-7B** — smoothly on ordinary **4–6 GB VRAM + 32 GB RAM** consumer PCs (AMD Vulkan & NVIDIA CUDA), with **zero C++ compilation**, **zero Visual Studio**, an **OpenAI-compatible API** for VS Code (Cline, Roo Code, Continue, OpenCode), and a dark **Web Studio**.
+**PicoCode** runs frontier sparse Mixture-of-Experts (MoE) and dense local coding models — led by **Qwen3-Coder-30B-A3B (up to `30.2 tok/s` via Adaptive Hybrid GPU MoE + lossless `ngram-mod`)**, **Inkling 2 Mini (26.4B / 3.4B Looped MoE + DSpark + Vision)**, and **Qwen2.5-Coder-7B** — smoothly on ordinary **4–6 GB VRAM + 32 GB RAM** consumer PCs (AMD Vulkan & NVIDIA CUDA), with **zero C++ compilation**, **zero Visual Studio**, an **OpenAI-compatible API** for VS Code (Cline, Roo Code, Continue, OpenCode) & **PicoStudio IDE**, and a dark **Web Studio**.
 
 All bundled code and default models are **100% Apache 2.0**.
 
@@ -10,18 +10,26 @@ All bundled code and default models are **100% Apache 2.0**.
 
 ## Key Highlights
 
-- **Zero-Compile Windows Setup (`.\setup.cmd`):** Automatically installs Python (if needed), downloads official prebuilt `llama.cpp b12720` Win64 **Vulkan** or **CUDA 12.4** binaries, and downloads verified GGUF models with resumable downloads. **No Visual Studio or C++ Build Tools required.**
-- **Smart Hybrid GPU+RAM MoE Engine:**
-  - Keeps attention, shared/loop layers, `q8_0` KV cache (`16K` context), `DSpark` block-drafting model, and `mmproj` Vision projector inside **~2.55 GiB GPU VRAM** while streaming sparse routed MoE experts from system RAM (`--cpu-moe --no-op-offload --no-host`).
-  - Eliminates Vulkan's `7.63 GiB` compute scratchpad overflow on 6 GB cards — cutting projected VRAM from **9.28 GiB → 2.55 GiB** and accelerating prompt eval by **23×**!
-- **Live VRAM Protection:** Automatically checks live free Dedicated VRAM before startup and caps context cleanly if browser/desktop apps are consuming heavy VRAM.
-- **Dark Web Studio (`http://127.0.0.1:7870`) + OpenAI API (`http://127.0.0.1:8080/v1`):**
-  - Streaming code chat with collapsible reasoning (`<think>`), 1-click code-block copy, screenshot/UI image upload (Inkling 2 Mini Vision), live Dedicated/Shared VRAM + RAM bars, and 1-click VS Code config snippets.
-  - Uses ports `7870` / `8080` so it runs cleanly side-by-side with **PicoVid** (`7860`).
+- **Zero-Compile Windows Setup (`.\setup.cmd`):** Automatically installs official prebuilt `llama.cpp b12807` Win64 **Vulkan** or **CUDA 12.4** binaries and verified GGUF models. **No Visual Studio or C++ Build Tools required.**
+- **Adaptive Hybrid GPU+RAM MoE + Zero-VRAM Lossless `ngram-mod` (`v0.2.0`):**
+  - Reads live free VRAM before startup and places `4–6` MoE expert layers directly onto 6 GB GDDR6 (`--n-cpu-moe N`, `336 GB/s` vs `35 GB/s` DDR4) with a `650 MiB` anti-spill guard, keeping full **`32K` `q8_0` KV cache** inside VRAM.
+  - Enables **`--spec-type ngram-mod`** (0 MB VRAM, 100% lossless speculative decoding), **`--poll 100`**, **`--cache-reuse 256`**, and **`-b 2048 -ub 512 -tb 12`** — hitting **`18.3–18.9 tok/s`** on fresh code and **`30.2 tok/s` (`232/232` acceptance!)** on real code edits/refactors!
+- **Smart Inkling 2 Mini Engine:** Keeps attention, loop layers, `q8_0` KV cache (`16K`), `DSpark`, and `mmproj` Vision inside **~2.55 GiB VRAM** (`23×` faster prompt eval).
+- **Live VRAM Protection:** Automatically caps context & GPU MoE layers if browsers/desktop apps consume heavy VRAM.
 
 ---
 
 ## Verified Real-World Benchmarks (AMD Radeon RX 5600 XT 6 GB Vulkan + Ryzen 5 5500 + 32 GB RAM)
+
+### 1. `Qwen3-Coder-30B-A3B-Instruct` (`IQ4_XS`, `15.25 GiB`, Full `32,768` Context, Live `llama-server`)
+
+| Configuration (`32K ctx`, `q8_0` KV) | Warm Load | Fresh Code (`tg`) | Real File Refactor (`pp` / `tg`) | Multi-Turn Follow-up (`KV Cache`) | Speculative (`0 MB VRAM`) | Peak Dedicated / Shared |
+|---|---:|---:|---:|---:|---:|---|
+| Previous Baseline (`b12720`, `--cpu-moe`, `b512/ub256`) | `3.1 s` | `16.20 tok/s` | `58.8` / `16.89 tok/s` (`36.7s`) | `1267/1305` · `17.05 tok/s` | OFF | `3.77 / 0.50 GiB` |
+| **`v0.2.0` Tuned (`b12807`, `-ncmoe 44`, `b2048/ub512`, `poll 100`, `ngram-mod`)** | **`3.5 s`** | **`18.25 tok/s`** | **`71.6` (+22%) / `30.21 tok/s` (+79%!) (`26.1s`)** | **`1267/1305` (`97%`) · `18.25 tok/s`** | **`232/232` (100%)** | **`4.89 / 0.59 GiB`** |
+| **`v0.2.0` `q4_0` KV (`-ncmoe 42`, 6 GPU MoE, `ngram-mod`)** | **`3.5 s`** | **`18.42 tok/s`** | **`71.8` (+22%) / `29.50 tok/s` (+75%!) (`26.3s`)** | **`1267/1305` (`97%`) · `18.92 tok/s`** | **`232/232` (100%)** | **`4.88 / 0.59 GiB`** |
+
+### 2. `Inkling-2-Mini` (`UD-Q4_K_M`, `15.47 GiB`, `16K` Context + Vision `mmproj` + DSpark)
 
 Measured live on Windows 11 with desktop + browser active (`~1.65 GiB` baseline Dedicated VRAM), `Inkling-2-Mini-UD-Q4_K_M.gguf` (`15.47 GiB`), `16,384` context (`q8_0` KV cache), Vision `mmproj` enabled, `256` generated tokens:
 

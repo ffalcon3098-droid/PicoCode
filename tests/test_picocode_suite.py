@@ -146,6 +146,36 @@ class TestPicoCodeSuite(unittest.TestCase):
         self.assertEqual(plan["n_gpu_layers"], 99)
         self.assertIsNone(plan["moe_cpu_override"])
 
+    def test_06b_qwen3_coder_30b_adaptive_hybrid_moe_and_ngram(self) -> None:
+        hw_free = {
+            "gpu_name": "AMD Radeon RX 5600 XT",
+            "backend": "vulkan",
+            "vram_total_gib": 6.0,
+            "live_free_ded_gib": 4.7,
+            "cpu_threads": 12,
+            "ram_total_gib": 32.0,
+        }
+        cmd, plan = serve.build_server_command(
+            "qwen3-coder-30b", hw_free, self.reg, server_exe="llama-server.exe", allow_missing_files=True
+        )
+        self.assertGreaterEqual(plan["gpu_moe_layers"], 4)
+        self.assertIn("--n-cpu-moe", cmd)
+        self.assertIn("--spec-type", cmd)
+        self.assertIn("ngram-mod", cmd)
+        self.assertIn("--poll", cmd)
+        self.assertIn("--cache-reuse", cmd)
+        self.assertEqual(plan["batch_size"], 2048)
+        self.assertEqual(plan["ubatch_size"], 512)
+
+        # Under heavy desktop VRAM pressure, hybrid MoE gracefully falls back to --cpu-moe without spilling
+        hw_tight = dict(hw_free, live_free_ded_gib=2.0)
+        cmd_tight, plan_tight = serve.build_server_command(
+            "qwen3-coder-30b", hw_tight, self.reg, server_exe="llama-server.exe", allow_missing_files=True
+        )
+        self.assertEqual(plan_tight["gpu_moe_layers"], 0)
+        self.assertIn("--cpu-moe", cmd_tight)
+        self.assertIn("ngram-mod", cmd_tight)
+
     def test_07_recommender_respects_ram_and_disk(self) -> None:
         p32, _ = download_models.recommend_profile({"ram_total_gib": 32.0, "disk_free_gib": 40.0, "vram_total_gib": 6.0})
         self.assertEqual(p32, "inkling2-mini")
