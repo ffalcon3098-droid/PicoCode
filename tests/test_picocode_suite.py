@@ -341,6 +341,75 @@ class TestPicoCodeSuite(unittest.TestCase):
             self.assertIn("Pinned file `main.py`", sys_p)
             self.assertIn("SECRET_VAL = 123", sys_p)
 
+    def test_11_v060_audit_hardening_and_model_optimizations(self) -> None:
+        import urllib.error
+
+        # 1) Vulkan DEVICE_LOCAL heap parser handles hex parentheticals and ignores System RAM heaps
+        sample_vk = """
+        memoryHeaps[0]:
+            size   = 5351931904 (0x13f000000) (4.98 GiB)
+            flags  = count = 1
+                MEMORY_HEAP_DEVICE_LOCAL_BIT
+        memoryHeaps[1]:
+            size   = 17123573760 (0x3fca50000) (15.95 GiB)
+            flags  = None
+        memoryHeaps[2]:
+            size   = 268435456 (0x10000000) (256.00 MiB)
+            flags  = count = 1
+                MEMORY_HEAP_DEVICE_LOCAL_BIT
+        """
+        self.assertEqual(probe_hardware.parse_vulkan_device_local_gib(sample_vk), 6.0)
+
+        # 2) Turkish 'h' (Hayir) in confirm_command MUST deny, NEVER auto-approve!
+        ui = tui.TerminalUI()
+        self.assertEqual(ui.confirm_command("echo hi", input_fn=lambda _: "h"), "n")
+        self.assertEqual(ui.confirm_command("echo hi", input_fn=lambda _: "hayir"), "n")
+        self.assertEqual(ui.confirm_command("echo hi", input_fn=lambda _: "t"), "a")
+        self.assertEqual(ui.confirm_command("echo hi", input_fn=lambda _: "e"), "y")
+
+        # 3) Epoch KV-cache-friendly compaction does NOT mutate messages below high-water mark
+        conv = [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}]
+        for i in range(9):
+            conv.append({"role": "tool", "tool_call_id": f"t{i}", "content": "a" * 600})
+        kept = agent_cli.compact_messages(conv, ctx_limit=32768)
+        self.assertEqual(kept[2]["content"], conv[2]["content"])  # Prefix untouched for 100% KV hit!
+        compacted = agent_cli.compact_messages(conv, ctx_limit=1000)  # Above 72% threshold
+        self.assertIn("[Compacted:", compacted[2]["content"])
+
+        # 4) Hardened dangerous command detector catches separated flags, aliases, git push -f, -enc
+        for bad in ("rm -r -f .", "ri -Rec -Fo .", "git push origin main -f", "powershell -enc AAA", "py -c 'import shutil; shutil.rmtree(\".\")'"):
+            self.assertIsNotNone(agent_cli.is_dangerous_command(bad), f"Failed to block: {bad}")
+
+        # 5) serve.py passes -fit off, registry sampling defaults, -ctkd q8_0, and f16 KV scale=2.0
+        hw = {"gpu_name": "RX 5600 XT", "backend": "vulkan", "vram_total_gib": 6.0, "live_free_ded_gib": 4.9, "cpu_threads": 12, "ram_total_gib": 32.0}
+        cmd_i, _ = serve.build_server_command("inkling2-mini", hw, self.reg, server_exe="llama-server.exe", allow_missing_files=True)
+        self.assertIn("-fit", cmd_i)
+        self.assertIn("-ctkd", cmd_i)
+        self.assertIn("--reasoning-budget", cmd_i)
+        self.assertIn("--top-p", cmd_i)
+        self.assertNotIn("--cache-reuse", cmd_i)  # Skipped on looped SWA/ShortConv
+
+        _, plan_f16 = serve.build_server_command("qwen3-coder-30b", hw, self.reg, server_exe="llama-server.exe", kv_type="f16", allow_missing_files=True)
+        _, plan_q8 = serve.build_server_command("qwen3-coder-30b", hw, self.reg, server_exe="llama-server.exe", kv_type="q8_0", allow_missing_files=True)
+        self.assertLessEqual(plan_f16["gpu_moe_layers"], plan_q8["gpu_moe_layers"])
+
+        # 6) Web UI CSRF + Host shield blocks unauthenticated POST
+        mgr = web_ui.ServerManager(api_host="127.0.0.1", api_port=18080)
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), web_ui.make_handler(mgr, csrf_token="tok123"))
+        port = httpd.server_address[1]
+        t = threading.Thread(target=httpd.serve_forever, daemon=True)
+        t.start()
+        try:
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                urllib.request.urlopen(urllib.request.Request(
+                    f"http://127.0.0.1:{port}/api/stop",
+                    data=b"{}", headers={"Content-Type": "application/json"}, method="POST",
+                ), timeout=5)
+            self.assertEqual(ctx.exception.code, 403)
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

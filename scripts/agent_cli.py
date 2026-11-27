@@ -36,6 +36,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from typing import Any
@@ -47,7 +48,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 from tui import TerminalUI, init_windows_console  # noqa: E402
 
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 
 IGNORE_DIRS = {
     ".git", "__pycache__", "node_modules", ".venv", "venv",
@@ -61,12 +62,12 @@ TEXT_EXTS = {
 CODE_EXTS = {".py", ".js", ".jsx", ".ts", ".tsx"}
 
 _DANGEROUS_PATTERNS = [
-    re.compile(r"\brm\s+-[a-z]*r[a-z]*f|\brm\s+-[a-z]*f[a-z]*r", re.I),
-    re.compile(r"\bremove-item\b[^\n]*-recurse[^\n]*-force|\bremove-item\b[^\n]*-force[^\n]*-recurse", re.I),
-    re.compile(r"\b(del|erase|rmdir|rd)\b[^\n]*(/[sqf]\s*){2,}", re.I),
-    re.compile(r"\bgit\s+reset\s+--hard\b|\bgit\s+clean\s+-[a-z]*f|\bgit\s+push\s+[^\n]*--force\b", re.I),
-    re.compile(r"\b(invoke-expression|iex)\b|\|\s*(sh|bash|powershell|pwsh)\b", re.I),
-    re.compile(r"\b(format-volume|diskpart|shutdown|stop-computer|reg\s+delete)\b", re.I),
+    re.compile(r"\brm\s+[^\n]*(-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r|-r\b[^\n]*-f\b|-f\b[^\n]*-r\b)", re.I | re.S),
+    re.compile(r"\b(remove-item|ri|del|erase|rmdir|rd)\b[^\n]*(-rec\w*[^\n]*-fo\w*|-fo\w*[^\n]*-rec\w*|-r\b[^\n]*-fo\w*|/[sqf]\s*[^\n]*/[sqf])", re.I | re.S),
+    re.compile(r"\bgit\s+(reset\s+--hard|clean\s+-[a-z]*f|push\s+[^\n]*(--force|-f\b)|checkout\s+--\s+\.|restore\s+\.)", re.I | re.S),
+    re.compile(r"\b(invoke-expression|iex)\b|\|\s*(sh|bash|powershell|pwsh)\b|-(enc|encodedcommand)\b", re.I | re.S),
+    re.compile(r"\[(?:system\.)?io\.(?:directory|file)\]::delete\b|\bshutil\.rmtree\b|\bfs\.rmSync\b", re.I | re.S),
+    re.compile(r"\b(format-volume|format\s+[a-z]:|diskpart|shutdown|stop-computer|reg\s+delete)\b", re.I | re.S),
 ]
 
 
@@ -158,6 +159,8 @@ class AgentWorkspace:
             for e in entries:
                 if len(out) >= max_items:
                     return
+                if e.is_symlink():
+                    continue
                 if e.is_dir():
                     if e.name in IGNORE_DIRS or e.name.startswith("."):
                         continue
@@ -175,19 +178,27 @@ class AgentWorkspace:
     def write_with_undo(self, rel_path: str, content: str) -> dict[str, Any]:
         p = self.safe_path(rel_path)
         existed = p.exists() and p.is_file()
-        old_text = p.read_text(encoding="utf-8", errors="replace") if existed else ""
+        orig_bytes = p.read_bytes() if existed else b""
+        if existed and b"\x00" in orig_bytes[:8192]:
+            raise ValueError(f"Binary file cannot be edited as text: {rel_path}")
+        orig_eol = "\r\n" if (existed and b"\r\n" in orig_bytes) else "\n"
+        old_text = orig_bytes.decode("utf-8", errors="replace").replace("\r\n", "\n") if existed else ""
+        norm_new = content.replace("\r\n", "\n")
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content, encoding="utf-8")
+        with p.open("w", encoding="utf-8", newline=orig_eol) as fh:
+            fh.write(norm_new)
         rel = p.relative_to(self.root).as_posix()
         uid = uuid.uuid4().hex[:10]
         self._undo_store[uid] = {
             "abs_path": str(p),
             "rel_path": rel,
             "existed": existed,
-            "old_content": old_text,
+            "old_bytes": orig_bytes,
         }
+        if len(self._undo_store) > 120:
+            del self._undo_store[next(iter(self._undo_store))]
         diff_lines = list(difflib.unified_diff(
-            old_text.splitlines(), content.splitlines(),
+            old_text.splitlines(), norm_new.splitlines(),
             fromfile=f"a/{rel}", tofile=f"b/{rel}", n=2, lineterm="",
         ))
         added = sum(1 for ln in diff_lines if ln.startswith("+") and not ln.startswith("+++"))
@@ -204,7 +215,7 @@ class AgentWorkspace:
             p = pathlib.Path(rec["abs_path"])
             if rec["existed"]:
                 p.parent.mkdir(parents=True, exist_ok=True)
-                p.write_text(rec["old_content"], encoding="utf-8")
+                p.write_bytes(rec["old_bytes"])
             elif p.exists():
                 p.unlink()
             count += 1
@@ -397,10 +408,13 @@ def execute_cli_tool(
                 return f"ERROR: Directory not found: {sub}", None
             lines = []
             for e in sorted(base.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))[:120]:
-                if e.name in IGNORE_DIRS:
+                if e.name in IGNORE_DIRS or e.is_symlink():
                     continue
                 rel = e.relative_to(ws.root).as_posix()
-                lines.append(f"{rel}/" if e.is_dir() else f"{rel} ({e.stat().st_size} B)")
+                try:
+                    lines.append(f"{rel}/" if e.is_dir() else f"{rel} ({e.stat().st_size} B)")
+                except OSError:
+                    continue
             return "\n".join(lines) or "(empty directory)", None
 
         if name == "read_file":
@@ -475,12 +489,12 @@ def execute_cli_tool(
 
         if name == "edit_file":
             rel = str(args.get("path") or "")
-            target = str(args.get("target") or "")
-            replacement = str(args.get("replacement") or "")
+            target = str(args.get("target") or "").replace("\r\n", "\n")
+            replacement = str(args.get("replacement") or "").replace("\r\n", "\n")
             p = ws.safe_path(rel)
             if not p.is_file():
                 return f"ERROR: File not found: {rel}", None
-            old = p.read_text(encoding="utf-8", errors="replace")
+            old = p.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n")
             if not target or target not in old:
                 return f"ERROR: Target text not found in {rel}. Read the file first.", None
             occ = old.count(target)
@@ -523,28 +537,54 @@ def execute_cli_tool(
             env = os.environ.copy()
             env["PYTHONPATH"] = str(ws.root) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
             env["PYTHONDONTWRITEBYTECODE"] = "1"
+            env["PYTHONIOENCODING"] = "utf-8"
             flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-            shell_cmd = ["powershell", "-NoProfile", "-Command", cmd] if os.name == "nt" else ["sh", "-lc", cmd]
-            res = subprocess.run(
-                shell_cmd, cwd=str(ws.root), env=env, capture_output=True,
-                text=True, encoding="utf-8", errors="replace", timeout=45, creationflags=flags,
+            if os.name == "nt":
+                ps_cmd = "[Console]::OutputEncoding=[Text.Encoding]::UTF8; " + cmd
+                shell_cmd = ["powershell", "-NoProfile", "-Command", ps_cmd]
+            else:
+                shell_cmd = ["sh", "-lc", cmd]
+            proc = subprocess.Popen(
+                shell_cmd, cwd=str(ws.root), env=env, stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, encoding="utf-8", errors="replace", creationflags=flags,
             )
-            out = ((res.stdout or "") + ("\n" + res.stderr if res.stderr else "")).strip()
-            return f"exit_code={res.returncode}\n{out[:5000]}", None
+            try:
+                out, _ = proc.communicate(timeout=45)
+            except subprocess.TimeoutExpired:
+                if os.name == "nt":
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True, creationflags=flags)
+                else:
+                    proc.kill()
+                return "ERROR: Command timed out after 45s (process tree terminated).", None
+            return f"exit_code={proc.returncode}\n{(out or '').strip()[:5000]}", None
 
         return f"ERROR: Unknown tool {name}", None
     except Exception as exc:
         return f"ERROR: {exc}", None
 
 
-def compact_messages(conv: list[dict[str, Any]], keep_recent_tools: int = 6) -> list[dict[str, Any]]:
+def compact_messages(
+    conv: list[dict[str, Any]],
+    *,
+    ctx_limit: int = 32768,
+    keep_recent_tools: int = 4,
+    high_water_ratio: float = 0.72,
+) -> list[dict[str, Any]]:
+    """
+    Hysteresis/epoch KV-cache-friendly compaction:
+    NEVER mutates older messages while below `high_water_ratio * ctx_limit` (preserving 100% KV prefix hits!).
+    Only when crossing the high-water mark, batch-compacts older tool outputs once.
+    """
+    if estimate_tokens(conv) < int(ctx_limit * high_water_ratio):
+        return conv
     tool_idxs = [i for i, m in enumerate(conv) if m.get("role") == "tool"]
     if len(tool_idxs) <= keep_recent_tools:
         return conv
     cutoff = tool_idxs[-keep_recent_tools]
     out: list[dict[str, Any]] = []
     for i, m in enumerate(conv):
-        if i < cutoff and m.get("role") == "tool" and isinstance(m.get("content"), str) and len(m["content"]) > 520:
+        if i < cutoff and m.get("role") == "tool" and isinstance(m.get("content"), str) and len(m["content"]) > 480 and not m["content"].startswith("[Compacted"):
             lines = m["content"].splitlines()
             head = "\n".join(lines[:3])[:200]
             tail = "\n".join(lines[-2:])[:120] if len(lines) > 5 else ""
@@ -552,6 +592,46 @@ def compact_messages(conv: list[dict[str, Any]], keep_recent_tools: int = 6) -> 
         else:
             out.append(m)
     return out
+
+
+def _extract_fallback_tool_calls(text: str, step: int, allowed: set[str]) -> list[dict[str, Any]]:
+    """Parse `<tool_call>{...}</tool_call>` or fenced JSON tool calls when a model omits structured tool_calls."""
+    found: list[dict[str, Any]] = []
+    candidates = re.findall(r"<tool_call>\s*(\{[\s\S]*?\})\s*</tool_call>", text)
+    if not candidates:
+        candidates = re.findall(r"```(?:json)?\s*\n(\{[\s\S]*?\})\s*```", text)
+    for idx, raw in enumerate(candidates):
+        try:
+            obj = json.loads(raw)
+        except Exception:
+            continue
+        if isinstance(obj, dict) and obj.get("name") in allowed and isinstance(obj.get("arguments"), dict):
+            found.append({
+                "id": f"fb_{step}_{idx}",
+                "type": "function",
+                "function": {"name": obj["name"], "arguments": json.dumps(obj["arguments"], ensure_ascii=False)},
+            })
+    return found
+
+
+def get_model_sampling_params(model_id: str) -> dict[str, Any]:
+    """Load per-model recommended sampling defaults from models_registry.json."""
+    reg_path = REPO_ROOT / "configs" / "models_registry.json"
+    defaults: dict[str, Any] = {}
+    try:
+        reg = json.loads(reg_path.read_text(encoding="utf-8"))
+        defaults = dict((reg.get("models") or {}).get(model_id, {}).get("defaults") or {})
+    except Exception:
+        pass
+    params: dict[str, Any] = {
+        "temperature": float(defaults.get("agent_temp", defaults.get("temp", 0.3))),
+        "top_p": float(defaults.get("top_p", 0.9)),
+        "min_p": float(defaults.get("min_p", 0.05)),
+        "cache_prompt": True,
+    }
+    if "inkling" in (model_id or "").lower():
+        params["reasoning_budget"] = int(defaults.get("reasoning_budget", 1536))
+    return params
 
 
 def server_is_healthy(base_url: str, timeout: float = 2.0) -> tuple[bool, str]:
@@ -632,15 +712,16 @@ def run_agent_turn(
 
     try:
         for step in range(1, max_steps + 1):
-            conv[:] = compact_messages(conv)
+            conv[:] = compact_messages(conv, ctx_limit=ctx_limit)
+            sampling = get_model_sampling_params(model)
             payload = {
                 "model": model,
                 "messages": conv,
                 "tools": tools_spec,
                 "tool_choice": "auto",
-                "temperature": 0.25,
                 "max_tokens": 4096,
                 "stream": True,
+                **sampling,
             }
             req = urllib.request.Request(
                 url, data=json.dumps(payload).encode("utf-8"),
@@ -649,6 +730,7 @@ def run_agent_turn(
             step_text: list[str] = []
             tc_map: dict[int, dict[str, Any]] = {}
             step_t0 = time.perf_counter()
+            step_err: str | None = None
 
             live = (ui.make_live_stream() if (ui is not None and not quiet) else None)
             if live is not None:
@@ -664,7 +746,10 @@ def run_agent_turn(
                         ds = ln[5:].strip()
                         if not ds or ds == "[DONE]":
                             continue
-                        ev = json.loads(ds)
+                        try:
+                            ev = json.loads(ds)
+                        except json.JSONDecodeError:
+                            continue
                         ch = ev.get("choices") or []
                         if not ch:
                             continue
@@ -704,6 +789,8 @@ def run_agent_turn(
                             if live is not None and not step_text:
                                 fn_disp = ent["function"]["name"] or "araç"
                                 live.update(ui.render_spinner(f"Araç hazırlanıyor: {fn_disp}..."))
+            except (urllib.error.URLError, OSError, TimeoutError) as exc:
+                step_err = f"Sunucu bağlantı/HTTP hatası: {exc}"
             finally:
                 if live is not None:
                     if step_text:
@@ -714,57 +801,77 @@ def run_agent_turn(
                 elif step_text and not quiet:
                     print()
 
-            if not tc_map:
-                conv.append({"role": "assistant", "content": "".join(step_text)})
+            if step_err:
+                if ui is not None and not quiet:
+                    ui.print_error(step_err)
                 break
 
-            tool_calls = [tc_map[k] for k in sorted(tc_map)]
+            if not tc_map:
+                allowed = READONLY_TOOLS if plan_only else {t["function"]["name"] for t in AGENT_TOOLS}
+                fb_calls = _extract_fallback_tool_calls("".join(step_text), step, allowed)
+                if not fb_calls:
+                    conv.append({"role": "assistant", "content": "".join(step_text)})
+                    break
+                tool_calls = fb_calls
+            else:
+                tool_calls = [tc_map[k] for k in sorted(tc_map)]
+
             conv.append({"role": "assistant", "content": "".join(step_text) or None, "tool_calls": tool_calls})
+            answered_ids: set[str] = set()
+            try:
+                for tc in tool_calls:
+                    fn_name = tc["function"]["name"]
+                    raw_args = tc["function"]["arguments"]
+                    try:
+                        parsed = json.loads(raw_args) if raw_args else {}
+                        if not isinstance(parsed, dict):
+                            raise ValueError("Tool arguments must be a JSON object")
+                        parse_err = None
+                    except Exception as exc:
+                        parsed = {}
+                        parse_err = str(exc)
 
-            for tc in tool_calls:
-                fn_name = tc["function"]["name"]
-                raw_args = tc["function"]["arguments"]
-                try:
-                    parsed = json.loads(raw_args) if raw_args else {}
-                    parse_err = None
-                except Exception as exc:
-                    parsed = {}
-                    parse_err = str(exc)
+                    sig = f"{fn_name}:{json.dumps(parsed, sort_keys=True, ensure_ascii=False)}"
+                    is_dup = (not parse_err) and len(recent_sigs) >= 2 and recent_sigs[-1] == sig and recent_sigs[-2] == sig
+                    recent_sigs.append(sig)
+                    if len(recent_sigs) > 6:
+                        recent_sigs.pop(0)
 
-                sig = f"{fn_name}:{json.dumps(parsed, sort_keys=True, ensure_ascii=False)}"
-                is_dup = (not parse_err) and len(recent_sigs) >= 2 and recent_sigs[-1] == sig and recent_sigs[-2] == sig
-                recent_sigs.append(sig)
-                if len(recent_sigs) > 6:
-                    recent_sigs.pop(0)
-
-                if parse_err:
-                    res_txt, chg = f"ERROR: Invalid JSON arguments ({parse_err}).", None
-                elif plan_only and fn_name not in READONLY_TOOLS:
-                    res_txt, chg = f"ERROR: Tool '{fn_name}' blocked in read-only /plan mode.", None
-                elif is_dup:
-                    res_txt, chg = f"ERROR: Repeated identical call to '{fn_name}' 3 times. Try another approach or finish.", None
-                else:
-                    tools_called.append(fn_name)
-                    if ui is not None and not quiet:
-                        ui.print_tool_start(fn_name, parsed)
-                    res_txt, chg = execute_cli_tool(
-                        ws, fn_name, parsed,
-                        auto_approve=session_auto_approve,
-                        confirm_fn=_confirm_cmd if ui is not None else None,
-                    )
-
-                if chg:
-                    turn_undos.append(chg["undo_id"])
-                    if ui is not None and not quiet:
-                        ui.print_diff_card(
-                            chg["path"], chg["added"], chg["removed"],
-                            chg.get("diff", ""), syntax_err=chg.get("syntax_error", ""),
+                    if parse_err:
+                        res_txt, chg = f"ERROR: Invalid JSON arguments ({parse_err}).", None
+                    elif plan_only and fn_name not in READONLY_TOOLS:
+                        res_txt, chg = f"ERROR: Tool '{fn_name}' blocked in read-only /plan mode.", None
+                    elif is_dup:
+                        res_txt, chg = f"ERROR: Repeated identical call to '{fn_name}' 3 times. Try another approach or finish.", None
+                    else:
+                        tools_called.append(fn_name)
+                        if ui is not None and not quiet:
+                            ui.print_tool_start(fn_name, parsed)
+                        res_txt, chg = execute_cli_tool(
+                            ws, fn_name, parsed,
+                            auto_approve=session_auto_approve,
+                            confirm_fn=_confirm_cmd if ui is not None else None,
                         )
-                elif ui is not None and not quiet:
-                    summary = _summarize_tool_output(fn_name, res_txt)
-                    ui.print_tool_result(summary, is_error=res_txt.startswith("ERROR:"))
 
-                conv.append({"role": "tool", "tool_call_id": tc["id"], "content": res_txt})
+                    if chg:
+                        turn_undos.append(chg["undo_id"])
+                        if ui is not None and not quiet:
+                            ui.print_diff_card(
+                                chg["path"], chg["added"], chg["removed"],
+                                chg.get("diff", ""), syntax_err=chg.get("syntax_error", ""),
+                            )
+                    elif ui is not None and not quiet:
+                        summary = _summarize_tool_output(fn_name, res_txt)
+                        ui.print_tool_result(summary, is_error=res_txt.startswith("ERROR:"))
+
+                    conv.append({"role": "tool", "tool_call_id": tc["id"], "content": res_txt})
+                    answered_ids.add(tc["id"])
+            except KeyboardInterrupt:
+                # Keep conv role/tool_call_id pairing valid for future turns
+                for tc in tool_calls:
+                    if tc["id"] not in answered_ids:
+                        conv.append({"role": "tool", "tool_call_id": tc["id"], "content": "ERROR: Cancelled by user."})
+                raise
     except KeyboardInterrupt:
         cancelled = True
         if ui is not None and not quiet:
@@ -794,21 +901,28 @@ def run_agent_turn(
     }
 
 
-def _build_system_prompt(ws: AgentWorkspace, plan_only: bool, pinned_files: list[str] | None = None) -> str:
+def _build_system_prompt(
+    ws: AgentWorkspace,
+    plan_only: bool,
+    pinned_files: list[str] | None = None,
+    *,
+    trusted: bool = True,
+) -> str:
     root_entries = []
     try:
         for e in sorted(ws.root.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))[:25]:
-            if e.name in IGNORE_DIRS:
+            if e.name in IGNORE_DIRS or e.is_symlink():
                 continue
             root_entries.append(e.name + ("/" if e.is_dir() else ""))
     except OSError:
         pass
     rules = ""
-    for rf in (".picostudio.md", "AGENTS.md"):
-        p = ws.root / rf
-        if p.is_file():
-            rules = f"\nProject rules ({rf}):\n{p.read_text(encoding='utf-8', errors='replace')[:1000]}\n"
-            break
+    if trusted:
+        for rf in (".picostudio.md", "AGENTS.md"):
+            p = ws.root / rf
+            if p.is_file() and not p.is_symlink():
+                rules = f"\nProject rules ({rf}):\n{p.read_text(encoding='utf-8', errors='replace')[:1000]}\n"
+                break
     pinned_block = ""
     if pinned_files:
         chunks = []
@@ -977,9 +1091,12 @@ def list_available_models() -> list[dict[str, Any]]:
         cf_key = mcfg.get("compact_file")
         installed = False
         for k in (mf_key, cf_key):
-            if k and k in files and (REPO_ROOT / files[k]["path"]).is_file():
-                installed = True
-                break
+            if k and k in files:
+                fp = REPO_ROOT / files[k]["path"]
+                exp = int(files[k].get("expected_bytes", 0))
+                if fp.is_file() and (exp <= 0 or fp.stat().st_size == exp):
+                    installed = True
+                    break
         ctx_lim = int((mcfg.get("defaults") or {}).get("ctx_size_6gb", 16384))
         out.append({
             "id": mid,
@@ -1013,20 +1130,28 @@ def resolve_model_ctx_limit(model_id: str) -> int:
 
 
 def _extract_port(base_url: str) -> str:
-    m_port = re.search(r":(\d+)", base_url or "")
-    return m_port.group(1) if m_port else "8080"
+    p = urllib.parse.urlparse(base_url or "")
+    return str(p.port) if p.port else "8080"
+
+
+def _is_local_url(base_url: str) -> bool:
+    h = (urllib.parse.urlparse(base_url or "").hostname or "").lower()
+    return h in ("127.0.0.1", "localhost", "::1")
 
 
 def _stop_server_on_port(proc: subprocess.Popen[str] | None, port: str) -> None:
-    """Cleanly terminate spawned server and any llama-server bound specifically to `port`."""
+    """Cleanly terminate spawned server tree and any llama-server bound specifically to `port`."""
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     if proc is not None and proc.poll() is None:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True, creationflags=flags)
+        else:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
     if os.name == "nt":
-        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         ps = (
             f"Get-CimInstance Win32_Process | Where-Object {{ $_.Name -eq 'llama-server.exe' "
             f"-and ($_.CommandLine -match '--port\\s+{port}(\\s|$)') }} | "
@@ -1036,7 +1161,7 @@ def _stop_server_on_port(proc: subprocess.Popen[str] | None, port: str) -> None:
             subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, timeout=8, creationflags=flags)
         except Exception:
             pass
-    time.sleep(0.5)
+    time.sleep(0.4)
 
 
 def _auto_start_server(ui: TerminalUI, base_url: str, model: str) -> subprocess.Popen[str] | None:
@@ -1062,10 +1187,14 @@ def _auto_start_server(ui: TerminalUI, base_url: str, model: str) -> subprocess.
             if live is not None:
                 live.update(ui.render_spinner(f"{model} yükleniyor... {time.perf_counter() - t0:.1f}s"))
             time.sleep(0.5)
+        _stop_server_on_port(proc, port)
+        return None
+    except BaseException:
+        _stop_server_on_port(proc, port)
+        raise
     finally:
         if live is not None:
             live.__exit__(None, None, None)
-    return None
 
 
 def _resolve_project_target(raw: str, current_root: pathlib.Path, projects: list[dict[str, Any]]) -> pathlib.Path:
@@ -1073,10 +1202,13 @@ def _resolve_project_target(raw: str, current_root: pathlib.Path, projects: list
     clean = (raw or "").strip().strip('"').strip("'")
     if clean.startswith("new:"):
         name = clean[4:].strip()
-        if not name or ".." in pathlib.Path(name).parts:
-            raise ValueError("Gecersiz yeni proje adi.")
-        base = REPO_ROOT.parent if REPO_ROOT.parent.is_dir() else current_root.parent
+        cand_name = pathlib.Path(name)
+        if not name or cand_name.is_absolute() or len(cand_name.parts) != 1 or name in (".", "..") or any(c in name for c in ("/", "\\", ":")):
+            raise ValueError("Gecersiz yeni proje adi (sadece tek klasor adi girin).")
+        base = (REPO_ROOT.parent if REPO_ROOT.parent.is_dir() else current_root.parent).resolve()
         target = (base / name).resolve()
+        if not target.is_relative_to(base):
+            raise PermissionError("Proje kok dizini disinda klasor olusturulamaz.")
         target.mkdir(parents=True, exist_ok=True)
         return target
     for p in projects:
@@ -1127,20 +1259,24 @@ def main(argv: list[str] | None = None) -> int:
     plan_only = bool(args.plan)
     auto_approve = bool(args.yes)
 
-    # Folder Trust Gate (Claude Code style)
+    # Folder Trust Gate (Claude Code style — enforced in BOTH interactive and one-shot modes!)
     if args.trust:
         trust_store.trust(ws.root)
-    elif is_interactive and not trust_store.is_trusted(ws.root):
-        decision = ui.prompt_trust_folder(str(ws.root))
-        if decision == "trust":
-            trust_store.trust(ws.root)
-            ui.print_ok(f"Güvenilen klasör kaydedildi: {ws.root.name}")
-        elif decision == "plan":
-            plan_only = True
-            ui.print_warn("Klasör salt-okunur Plan Modunda açıldı (dosyalar değiştirilmeyecek).")
+    elif not trust_store.is_trusted(ws.root):
+        if is_interactive:
+            decision = ui.prompt_trust_folder(str(ws.root))
+            if decision == "trust":
+                trust_store.trust(ws.root)
+                ui.print_ok(f"Güvenilen klasör kaydedildi: {ws.root.name}")
+            elif decision == "plan":
+                plan_only = True
+                ui.print_warn("Klasör salt-okunur Plan Modunda açıldı (dosyalar değiştirilmeyecek).")
+            else:
+                ui.print_info("İşlem iptal edildi.")
+                return 0
         else:
-            ui.print_info("İşlem iptal edildi.")
-            return 0
+            plan_only = True
+            ui.print_warn(f"'{ws.root.name}' güvenilen klasör değil — tek seferlik çalıştırma salt-okunur Plan Modunda sınırlandı (yazma için `--trust` ekleyin).")
 
     spawned_proc: subprocess.Popen[str] | None = None
     active_model = resolve_model_alias(args.model)
@@ -1161,7 +1297,7 @@ def main(argv: list[str] | None = None) -> int:
         ui.print_error(f"PicoCode sunucusuna bağlanılamadı ({args.url}). Önce `picocode.cmd --model {active_model}` ile başlatın.")
         return 1
 
-    conv: list[dict[str, Any]] = [{"role": "system", "content": _build_system_prompt(ws, plan_only, pinned_files)}]
+    conv: list[dict[str, Any]] = [{"role": "system", "content": _build_system_prompt(ws, plan_only, pinned_files, trusted=trust_store.is_trusted(ws.root))}]
 
     def _show_welcome() -> None:
         gb, gc = get_git_summary(ws)
@@ -1289,14 +1425,14 @@ def main(argv: list[str] | None = None) -> int:
                     ui.print_error(str(exc))
                 continue
             if user_in == "/drop" or user_in.startswith("/drop "):
-                rel = user_in[5:].strip()
+                rel = user_in[5:].strip().replace("\\", "/").lstrip("/")
                 if not rel:
                     pinned_files.clear()
-                    conv[0] = {"role": "system", "content": _build_system_prompt(ws, plan_only, pinned_files)}
+                    conv[0] = {"role": "system", "content": _build_system_prompt(ws, plan_only, pinned_files, trusted=trust_store.is_trusted(ws.root))}
                     ui.print_ok("Tüm sabitlenmiş dosyalar bağlamdan çıkarıldı.")
                 elif rel in pinned_files:
                     pinned_files.remove(rel)
-                    conv[0] = {"role": "system", "content": _build_system_prompt(ws, plan_only, pinned_files)}
+                    conv[0] = {"role": "system", "content": _build_system_prompt(ws, plan_only, pinned_files, trusted=trust_store.is_trusted(ws.root))}
                     ui.print_ok(f"Bağlamdan çıkarıldı: {rel}")
                 else:
                     ui.print_warn(f"Sabitli dosya bulunamadı: {rel}")
@@ -1307,13 +1443,16 @@ def main(argv: list[str] | None = None) -> int:
                 if not arg_m:
                     ui.print_models_table(models, active_model)
                     continue
+                if not _is_local_url(args.url) or args.no_auto_start:
+                    ui.print_error("Uzak sunucuda veya --no-auto-start modunda canlı /model değiştirme devre dışı.")
+                    continue
                 target_id = resolve_model_alias(arg_m)
                 match = next((m for m in models if m["id"] == target_id), None)
                 if not match:
                     ui.print_error(f"Bilinmeyen model: '{arg_m}'. Kurulu modelleri görmek için `/model` yazın.")
                     continue
                 if not match["installed"]:
-                    ui.print_error(f"'{target_id}' diske henüz indirilmemiş. Önce `setup.cmd` ile indirin.")
+                    ui.print_error(f"'{target_id}' diske henüz indirilmemiş (veya yarım kalmış). Önce `setup.cmd` ile indirin.")
                     continue
                 if target_id == active_model and server_is_healthy(args.url, timeout=1.5)[0]:
                     ui.print_ok(f"Zaten aktif model: {active_model}")
@@ -1324,9 +1463,14 @@ def main(argv: list[str] | None = None) -> int:
                 if spawned_proc is None:
                     ui.print_error(f"'{target_id}' başlatılamadı! Eski modele ({active_model}) dönülüyor...")
                     spawned_proc = _auto_start_server(ui, args.url, active_model)
+                    if spawned_proc is None:
+                        ui.print_error("Eski model de başlatılamadı. `/exit` ile çıkıp yeniden deneyin.")
                     continue
                 active_model = target_id
                 ctx_limit = resolve_model_ctx_limit(active_model)
+                if estimate_tokens(conv) > int(ctx_limit * 0.72):
+                    conv[:] = compact_messages(conv, ctx_limit=ctx_limit, high_water_ratio=0.5)
+                    ui.print_warn(f"Yeni model bağlamı ({ctx_limit // 1024}K) için eski araç çıktıları sıkıştırıldı.")
                 ui.print_ok(f"Model değiştirildi → {active_model} ({time.perf_counter() - t0:.1f}s · sohbet geçmişi korundu)")
                 continue
             if user_in == "/clear":

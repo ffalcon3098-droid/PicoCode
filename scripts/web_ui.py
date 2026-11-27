@@ -21,11 +21,13 @@ import argparse
 import json
 import os
 import pathlib
+import secrets
 import subprocess
 import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import webbrowser
 from http import HTTPStatus
@@ -49,6 +51,7 @@ class ServerManager:
         self.api_host = api_host
         self.api_port = api_port
         self.lock = threading.Lock()
+        self._op_lock = threading.RLock()
         self.proc: subprocess.Popen[str] | None = None
         self.state: str = "stopped"  # stopped | starting | ready | error
         self.active_plan: dict[str, Any] | None = None
@@ -66,17 +69,21 @@ class ServerManager:
                 self.logs = self.logs[-120:]
 
     def stop(self) -> None:
-        with self.lock:
-            proc = self.proc
-            self.proc = None
-            self.state = "stopped"
-            self.active_plan = None
-        if proc is not None and proc.poll() is None:
-            proc.terminate()
-            try:
-                proc.wait(timeout=6)
-            except subprocess.TimeoutExpired:
-                proc.kill()
+        with self._op_lock:
+            with self.lock:
+                proc = self.proc
+                self.proc = None
+                self.state = "stopped"
+                self.active_plan = None
+                dl_proc = self.dl_proc
+                self.dl_proc = None
+            for p in (proc, dl_proc):
+                if p is not None and p.poll() is None:
+                    p.terminate()
+                    try:
+                        p.wait(timeout=6)
+                    except subprocess.TimeoutExpired:
+                        p.kill()
 
     def start(
         self,
@@ -87,112 +94,128 @@ class ServerManager:
         use_draft: bool = True,
         use_vision: bool = True,
     ) -> tuple[bool, str]:
-        self.stop()
-        reg = serve.load_registry()
-        hw = probe_hardware.probe_hardware(REPO_ROOT / "models")
-        self.hw_base = hw
-        exe = serve.find_llama_server(hw.get("backend", "vulkan"))
-        if exe is None:
-            return False, "llama-server.exe bulunamadi! Once .\\setup.cmd calistirin."
-        try:
-            cmd, plan = serve.build_server_command(
-                model_id,
-                hw,
-                reg,
-                server_exe=exe,
-                host=self.api_host,
-                port=self.api_port,
-                ctx_size=ctx_size,
-                flash_attn=flash_attn,
-                use_draft=use_draft,
-                use_vision=use_vision,
+        with self._op_lock:
+            self.stop()
+            reg = serve.load_registry()
+            if model_id not in reg["models"]:
+                return False, f"Bilinmeyen model: {model_id}"
+            if flash_attn not in ("auto", "on", "off"):
+                flash_attn = "auto"
+            if ctx_size is not None:
+                try:
+                    ctx_size = max(2048, min(131072, int(ctx_size)))
+                except (TypeError, ValueError):
+                    return False, "Gecersiz ctx_size degeri."
+            hw = probe_hardware.probe_hardware(REPO_ROOT / "models")
+            self.hw_base = hw
+            exe = serve.find_llama_server(hw.get("backend", "vulkan"))
+            if exe is None:
+                return False, "llama-server.exe bulunamadi! Once .\\setup.cmd calistirin."
+            try:
+                cmd, plan = serve.build_server_command(
+                    model_id,
+                    hw,
+                    reg,
+                    server_exe=exe,
+                    host=self.api_host,
+                    port=self.api_port,
+                    ctx_size=ctx_size,
+                    flash_attn=flash_attn,
+                    use_draft=use_draft,
+                    use_vision=use_vision,
+                )
+            except Exception as exc:
+                return False, str(exc)
+
+            with self.lock:
+                self.logs = [f"[PicoCode] Baslatiliyor: {plan['label']}", f"[PicoCode] Komut: {' '.join(cmd)}"]
+                self.state = "starting"
+                self.active_plan = plan
+                self.error_msg = ""
+
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                creationflags=flags,
             )
-        except Exception as exc:
-            return False, str(exc)
-
-        with self.lock:
-            self.logs = [f"[PicoCode] Baslatiliyor: {plan['label']}", f"[PicoCode] Komut: {' '.join(cmd)}"]
-            self.state = "starting"
-            self.active_plan = plan
-            self.error_msg = ""
-
-        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            creationflags=flags,
-        )
-        with self.lock:
-            self.proc = proc
-
-        def _watch() -> None:
-            assert proc.stdout is not None
-            for line in proc.stdout:
-                self._append_log(line.rstrip())
-            code = proc.wait()
             with self.lock:
-                if self.proc is proc:
-                    if self.state != "stopped":
-                        self.state = "error"
-                        self.error_msg = f"llama-server cikis yapti (kod={code})"
-                    self.proc = None
+                self.proc = proc
 
-        def _health() -> None:
-            ok = serve.wait_for_health(self.api_host, self.api_port, proc, timeout_s=240.0)
-            with self.lock:
-                if self.proc is proc:
-                    if ok:
-                        self.state = "ready"
-                        self.logs.append(f"[PicoCode] Sunucu HAZIR -> http://{self.api_host}:{self.api_port}/v1")
-                    elif self.state == "starting":
-                        self.state = "error"
-                        self.error_msg = "Sunucu saglik kontrolunu gecemedi. Loglara bakin."
+            connect_host = "127.0.0.1" if self.api_host in ("0.0.0.0", "::", "") else self.api_host
 
-        threading.Thread(target=_watch, daemon=True).start()
-        threading.Thread(target=_health, daemon=True).start()
-        return True, "Baslatiliyor..."
+            def _watch() -> None:
+                assert proc.stdout is not None
+                for line in proc.stdout:
+                    self._append_log(line.rstrip())
+                code = proc.wait()
+                with self.lock:
+                    if self.proc is proc:
+                        if self.state != "stopped":
+                            self.state = "error"
+                            self.error_msg = f"llama-server cikis yapti (kod={code})"
+                        self.proc = None
+
+            def _health() -> None:
+                ok = serve.wait_for_health(connect_host, self.api_port, proc, timeout_s=240.0)
+                with self.lock:
+                    if self.proc is proc:
+                        if ok:
+                            self.state = "ready"
+                            self.logs.append(f"[PicoCode] Sunucu HAZIR -> http://{connect_host}:{self.api_port}/v1")
+                        elif self.state == "starting":
+                            self.state = "error"
+                            self.error_msg = "Sunucu saglik kontrolunu gecemedi. Loglara bakin."
+
+            threading.Thread(target=_watch, daemon=True).start()
+            threading.Thread(target=_health, daemon=True).start()
+            return True, "Baslatiliyor..."
 
     def start_download(self, profile: str) -> tuple[bool, str]:
-        with self.lock:
-            if self.dl_proc is not None and self.dl_proc.poll() is None:
-                return False, f"Zaten indiriliyor: {self.dl_profile}"
-            self.dl_profile = profile
-            self.dl_logs = [f"[PicoCode] Indirme basladi: {profile}"]
-
-        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        cmd = [sys.executable, "-u", str(SCRIPT_DIR / "download_models.py"), "--install-engine", "auto", "--profile", profile]
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            creationflags=flags,
-        )
-        with self.lock:
-            self.dl_proc = proc
-
-        def _read_dl() -> None:
-            assert proc.stdout is not None
-            for line in proc.stdout:
-                clean = line.strip()
-                if clean:
-                    with self.lock:
-                        self.dl_logs.append(clean)
-                        if len(self.dl_logs) > 60:
-                            self.dl_logs = self.dl_logs[-60:]
-            proc.wait()
+        reg = serve.load_registry()
+        if profile not in reg.get("download_profiles", {}):
+            return False, f"Gecersiz indirme profili: {profile}"
+        with self._op_lock:
             with self.lock:
-                self.dl_logs.append(f"[PicoCode] Indirme tamamlandi (kod={proc.returncode})")
-                self.dl_proc = None
+                if self.dl_proc is not None and self.dl_proc.poll() is None:
+                    return False, f"Zaten indiriliyor: {self.dl_profile}"
+                self.dl_profile = profile
+                self.dl_logs = [f"[PicoCode] Indirme basladi: {profile}"]
 
-        threading.Thread(target=_read_dl, daemon=True).start()
-        return True, f"Indirme baslatildi: {profile}"
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            cmd = [sys.executable, "-u", str(SCRIPT_DIR / "download_models.py"), "--install-engine", "auto", "--profile", profile]
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                creationflags=flags,
+            )
+            with self.lock:
+                self.dl_proc = proc
+
+            def _read_dl() -> None:
+                assert proc.stdout is not None
+                for line in proc.stdout:
+                    clean = line.strip()
+                    if clean:
+                        with self.lock:
+                            self.dl_logs.append(clean)
+                            if len(self.dl_logs) > 60:
+                                self.dl_logs = self.dl_logs[-60:]
+                proc.wait()
+                with self.lock:
+                    self.dl_logs.append(f"[PicoCode] Indirme tamamlandi (kod={proc.returncode})")
+                    self.dl_proc = None
+
+            threading.Thread(target=_read_dl, daemon=True).start()
+            return True, f"Indirme baslatildi: {profile}"
 
     def get_status(self) -> dict[str, Any]:
         ded_m, shr_m = probe_hardware.probe_live_vram_mib()
@@ -326,12 +349,13 @@ HTML_PAGE = r"""<!doctype html>
   .img-preview { max-height: 90px; border-radius: 6px; border: 1px solid var(--border); }
   @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } aside { max-height: 36vh; } }
 </style>
+<meta name="pc-csrf" content="__PC_CSRF__" />
 </head>
 <body>
 <header>
   <div class="brand">
     <span>PicoCode Studio</span>
-    <span class="pill">v0.1.0</span>
+    <span class="pill">v0.6.0</span>
     <span id="srvBadge" class="pill warn">Kapali</span>
   </div>
   <div class="metrics">
@@ -648,10 +672,26 @@ async function pollStatus() {
       dlBox.style.display = 'block';
       document.getElementById('dlStatus').textContent = dl.running ? `Indiriliyor: ${dl.profile}` : `Son indirme: ${dl.profile}`;
       document.getElementById('dlLogs').textContent = (dl.logs || []).join('\n');
-      if (!dl.running) refreshModels();
+      if (window._lastDlRunning && !dl.running) refreshModels();
+      window._lastDlRunning = !!dl.running;
     }
   } catch (e) {}
 }
+
+const PC_CSRF = document.querySelector('meta[name="pc-csrf"]')?.getAttribute('content') || '';
+const _pcOrigFetch = window.fetch.bind(window);
+window.fetch = function(input, init) {
+  const url = typeof input === 'string' ? input : (input?.url || '');
+  const opts = init ? {...init} : {};
+  if ((opts.method || 'GET').toUpperCase() === 'POST' && url.startsWith('/api/')) {
+    const h = new Headers(opts.headers || {});
+    if (PC_CSRF) h.set('X-PicoCode-Token', PC_CSRF);
+    if (!h.has('Content-Type')) h.set('Content-Type', 'application/json');
+    opts.headers = h;
+    if (opts.body === undefined) opts.body = '{}';
+  }
+  return _pcOrigFetch(input, opts);
+};
 
 async function sendChat() {
   const box = document.getElementById('promptBox');
@@ -708,9 +748,22 @@ async function sendChat() {
         temperature: 0.4,
       }),
     });
+    if (!resp.ok) {
+      const errJ = await resp.json().catch(() => ({error: resp.statusText}));
+      aDiv.querySelector('.body').textContent = 'Hata: ' + (errJ.error || resp.status);
+      historyMsgs.pop();
+      return;
+    }
     const reader = resp.body.getReader();
     const dec = new TextDecoder();
     let buf = '';
+    let rafPending = false;
+    const paintBody = () => {
+      rafPending = false;
+      const combined = (fullReason ? `<think>${fullReason}</think>\n` : '') + fullText;
+      aDiv.querySelector('.body').innerHTML = renderMarkdown(combined);
+      chatLog.scrollTop = chatLog.scrollHeight;
+    };
     while (true) {
       const {done, value} = await reader.read();
       if (done) break;
@@ -734,12 +787,11 @@ async function sendChat() {
               document.getElementById('tpsBadge').textContent = (tokCount / elapsed).toFixed(1) + ' tok/s';
             }
           }
-          const combined = (fullReason ? `<think>${fullReason}</think>\n` : '') + fullText;
-          aDiv.querySelector('.body').innerHTML = renderMarkdown(combined);
-          chatLog.scrollTop = chatLog.scrollHeight;
+          if (!rafPending) { rafPending = true; requestAnimationFrame(paintBody); }
         } catch (e) {}
       }
     }
+    paintBody();
     const totalS = ((performance.now() - t0) / 1000).toFixed(1);
     aDiv.querySelector('.stat').textContent = `${tokCount} token · ${totalS}s`;
     historyMsgs.push({role: 'assistant', content: fullText});
@@ -759,25 +811,54 @@ setInterval(pollStatus, 2500);
 """
 
 
-def make_handler(mgr: ServerManager) -> type[BaseHTTPRequestHandler]:
+def make_handler(mgr: ServerManager, *, csrf_token: str | None = None) -> type[BaseHTTPRequestHandler]:
+    session_csrf = csrf_token or secrets.token_urlsafe(24)
+
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt: str, *args: Any) -> None:
             pass
+
+        def _check_host(self) -> bool:
+            host_hdr = (self.headers.get("Host") or "").strip().lower()
+            h_only = host_hdr.split(":")[0] if ":" in host_hdr and not host_hdr.startswith("[") else host_hdr
+            return h_only in ("127.0.0.1", "localhost", "[::1]")
+
+        def _check_post_security(self) -> tuple[bool, str]:
+            if not self._check_host():
+                return False, "Gecersiz Host basligi."
+            ct = (self.headers.get("Content-Type") or "").lower()
+            if "application/json" not in ct:
+                return False, "Content-Type application/json olmalidir."
+            origin = (self.headers.get("Origin") or "").strip()
+            if origin:
+                p = urllib.parse.urlparse(origin)
+                if (p.hostname or "").lower() not in ("127.0.0.1", "localhost", "::1"):
+                    return False, "Dis origin engellendi."
+            tok = (self.headers.get("X-PicoCode-Token") or "").strip()
+            if not secrets.compare_digest(tok, session_csrf):
+                return False, "CSRF token gecersiz."
+            return True, ""
 
         def _send_json(self, data: Any, status: int = 200) -> None:
             raw = json.dumps(data, ensure_ascii=False).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(raw)))
+            self.send_header("X-Content-Type-Options", "nosniff")
             self.end_headers()
             self.wfile.write(raw)
 
         def do_GET(self) -> None:
+            if not self._check_host():
+                self._send_json({"error": "Forbidden host"}, status=403)
+                return
             if self.path in ("/", "/index.html"):
-                raw = HTML_PAGE.encode("utf-8")
+                raw = HTML_PAGE.replace("__PC_CSRF__", session_csrf).encode("utf-8")
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(raw)))
+                self.send_header("X-Frame-Options", "DENY")
+                self.send_header("X-Content-Type-Options", "nosniff")
                 self.end_headers()
                 self.wfile.write(raw)
                 return
@@ -790,7 +871,19 @@ def make_handler(mgr: ServerManager) -> type[BaseHTTPRequestHandler]:
             self._send_json({"error": "Not found"}, status=404)
 
         def do_POST(self) -> None:
-            length = int(self.headers.get("Content-Length", "0") or "0")
+            ok_sec, sec_err = self._check_post_security()
+            if not ok_sec:
+                self._send_json({"error": sec_err}, status=403)
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0") or "0")
+            except ValueError:
+                self._send_json({"error": "Gecersiz Content-Length"}, status=400)
+                return
+            max_bytes = 16 * 1024 * 1024 if self.path == "/api/chat" else 128 * 1024
+            if length < 0 or length > max_bytes:
+                self._send_json({"error": "Istek boyutu siniri asiyor."}, status=413)
+                return
             raw = self.rfile.read(length) if length > 0 else b"{}"
             try:
                 body = json.loads(raw.decode("utf-8")) if raw else {}
@@ -819,20 +912,22 @@ def make_handler(mgr: ServerManager) -> type[BaseHTTPRequestHandler]:
                 return
 
             if self.path == "/api/chat":
-                # Stream SSE directly from llama-server /v1/chat/completions
-                target = f"http://{mgr.api_host}:{mgr.api_port}/v1/chat/completions"
+                connect_host = "127.0.0.1" if mgr.api_host in ("0.0.0.0", "::", "") else mgr.api_host
+                target = f"http://{connect_host}:{mgr.api_port}/v1/chat/completions"
                 req = urllib.request.Request(
                     target,
                     data=json.dumps(body).encode("utf-8"),
                     headers={"Content-Type": "application/json"},
                     method="POST",
                 )
+                headers_sent = False
                 try:
                     with urllib.request.urlopen(req, timeout=300) as resp:
                         self.send_response(200)
                         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
                         self.send_header("Cache-Control", "no-cache")
                         self.end_headers()
+                        headers_sent = True
                         while True:
                             chunk = resp.readline()
                             if not chunk:
@@ -840,7 +935,8 @@ def make_handler(mgr: ServerManager) -> type[BaseHTTPRequestHandler]:
                             self.wfile.write(chunk)
                             self.wfile.flush()
                 except Exception as exc:
-                    self._send_json({"error": str(exc)}, status=502)
+                    if not headers_sent:
+                        self._send_json({"error": str(exc)}, status=502)
                 return
 
             self._send_json({"error": "Not found"}, status=404)

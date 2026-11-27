@@ -16,6 +16,7 @@ Licensed under the Apache License, Version 2.0.
 
 from __future__ import annotations
 
+import html
 import os
 import pathlib
 import sys
@@ -52,6 +53,7 @@ try:
     from rich.console import Console
     from rich.live import Live
     from rich.markdown import Markdown
+    from rich.markup import escape as rich_escape
     from rich.panel import Panel
     from rich.spinner import Spinner
     from rich.table import Table
@@ -59,6 +61,8 @@ try:
     HAS_RICH = True
 except ImportError:
     HAS_RICH = False
+    def rich_escape(s: str) -> str:  # type: ignore[misc]
+        return s
 
 try:
     from prompt_toolkit import PromptSession
@@ -301,8 +305,8 @@ class TerminalUI:
         if git_branch:
             git_str += f"  [#f59e0b]({git_changes} değişiklik)[/]" if git_changes else "  [#22c55e](temiz)[/]"
 
-        meta.add_row("Model", f"[bold #38bdf8]{model}[/]  [#64748b]({ctx_limit // 1024}K ctx)[/]")
-        meta.add_row("Proje", f"[bold #f8fafc]{workspace_name}[/]  {trust_tag}  [#64748b]{workspace_path}[/]")
+        meta.add_row("Model", f"[bold #38bdf8]{rich_escape(model)}[/]  [#64748b]({ctx_limit // 1024}K ctx)[/]")
+        meta.add_row("Proje", f"[bold #f8fafc]{rich_escape(workspace_name)}[/]  {trust_tag}  [#64748b]{rich_escape(workspace_path)}[/]")
         meta.add_row("Git", git_str)
         meta.add_row("Mod", mode_str)
         meta.add_row(
@@ -351,15 +355,18 @@ class TerminalUI:
             mode_cls = "bottom-toolbar.warn" if plan_only else "bottom-toolbar.ok"
             mode_lbl = "PLAN" if plan_only else "AGENT"
             yes_lbl = " · YES" if auto_approve else ""
-            proj_part = f"  <bottom-toolbar.sep>│</bottom-toolbar.sep>  📁 {workspace_name}" if workspace_name else ""
-            branch_part = f"  <bottom-toolbar.sep>│</bottom-toolbar.sep>  ⎇ {git_branch}" if git_branch else ""
+            safe_model = html.escape(model)
+            safe_ws = html.escape(workspace_name)
+            safe_br = html.escape(git_branch)
+            proj_part = f"  <bottom-toolbar.sep>│</bottom-toolbar.sep>  📁 {safe_ws}" if safe_ws else ""
+            branch_part = f"  <bottom-toolbar.sep>│</bottom-toolbar.sep>  ⎇ {safe_br}" if safe_br else ""
             pin_part = f"  <bottom-toolbar.sep>│</bottom-toolbar.sep>  <bottom-toolbar.key>📎 {pinned_count}</bottom-toolbar.key>" if pinned_count else ""
             ctx_cls = "bottom-toolbar.warn" if pct >= 65 else "bottom-toolbar.key"
 
             def _toolbar():
                 return HTML(
                     f" <{mode_cls}>● {mode_lbl}{yes_lbl}</{mode_cls}>"
-                    f"  <bottom-toolbar.sep>│</bottom-toolbar.sep>  <bottom-toolbar.key>{model}</bottom-toolbar.key>"
+                    f"  <bottom-toolbar.sep>│</bottom-toolbar.sep>  <bottom-toolbar.key>{safe_model}</bottom-toolbar.key>"
                     f"{proj_part}{branch_part}{pin_part}"
                     f"  <bottom-toolbar.sep>│</bottom-toolbar.sep>  ctx <{ctx_cls}>{k_str} ({pct}%)</{ctx_cls}>"
                     f"  <bottom-toolbar.sep>│</bottom-toolbar.sep>  /project · /model · /add"
@@ -383,19 +390,19 @@ class TerminalUI:
 
     def print_ok(self, msg: str) -> None:
         if self.console:
-            self.console.print(f"  [bold #22c55e]✓[/] [#e2e8f0]{msg}[/]")
+            self.console.print(f"  [bold #22c55e]✓[/] [#e2e8f0]{rich_escape(msg)}[/]")
         else:
             print(f"  ✓ {msg}")
 
     def print_warn(self, msg: str) -> None:
         if self.console:
-            self.console.print(f"  [bold #f59e0b]▲[/] [#fde68a]{msg}[/]")
+            self.console.print(f"  [bold #f59e0b]▲[/] [#fde68a]{rich_escape(msg)}[/]")
         else:
             print(f"  ▲ {msg}")
 
     def print_error(self, msg: str) -> None:
         if self.console:
-            self.console.print(f"  [bold #ef4444]✗[/] [#fca5a5]{msg}[/]")
+            self.console.print(f"  [bold #ef4444]✗[/] [#fca5a5]{rich_escape(msg)}[/]")
         else:
             print(f"  ✗ {msg}")
 
@@ -631,12 +638,12 @@ class TerminalUI:
                 body.append(ln, style="#94a3b8")
         if syntax_err:
             body.append(f"\n⚠ {syntax_err}", style="bold #f87171")
-        title = f"[bold #34d399]✏ {path}[/]  [bold #22c55e]+{added}[/] [bold #ef4444]-{removed}[/]"
+        title = f"[bold #34d399]✏ {rich_escape(path)}[/]  [bold #22c55e]+{added}[/] [bold #ef4444]-{removed}[/]"
         self.console.print(
             Panel(body, title=title, title_align="left", border_style="#1e3a5f", box=box.ROUNDED, padding=(0, 1))
         )
 
-    def confirm_command(self, cmd: str) -> str:
+    def confirm_command(self, cmd: str, *, input_fn: Callable[[str], str] | None = None) -> str:
         """Ask user to approve shell command: returns 'y', 'a' (always this session), or 'n'."""
         if self.console:
             self.console.print(
@@ -649,14 +656,17 @@ class TerminalUI:
                     padding=(0, 1),
                 )
             )
-            prompt_str = "  [e] Çalıştır  ·  [h] Bu oturumda hep izin ver  ·  [Enter/h-hayır] İptal: "
+            prompt_str = "  [e] Çalıştır  ·  [t] Bu oturumda tümüne izin ver  ·  [h / Enter] Hayır (İptal): "
         else:
             prompt_str = f"  Run `{cmd}`? [y/a/N]: "
+        reader = input_fn or input
         try:
-            ans = input(prompt_str).strip().lower()
+            ans = reader(prompt_str).strip().lower()
         except (EOFError, KeyboardInterrupt):
             return "n"
-        if ans in ("a", "always", "h", "hep"):
+        if ans in ("h", "hayir", "hayır", "n", "no", ""):
+            return "n"
+        if ans in ("a", "always", "t", "tumu", "tümü"):
             return "a"
         if ans in ("y", "yes", "e", "evet"):
             return "y"

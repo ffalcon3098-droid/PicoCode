@@ -11,7 +11,7 @@ Set-Location $RepoRoot
 
 Write-Host ""
 Write-Host "============================================================" -ForegroundColor Cyan
-Write-Host "  PicoCode v0.1.0 — Tek Tikla Yerel Kodlama AI Kurulumu" -ForegroundColor Cyan
+Write-Host "  PicoCode v0.6.0 — Tek Tikla Yerel Kodlama AI Kurulumu" -ForegroundColor Cyan
 Write-Host "  (4-6 GB VRAM + 32 GB RAM | Visual Studio / C++ GEREKMEZ!)" -ForegroundColor DarkCyan
 Write-Host "============================================================" -ForegroundColor Cyan
 Write-Host ""
@@ -42,7 +42,8 @@ if (-not $PyCmd) {
         exit 1
     }
 }
-Write-Host "[1/3] Python hazir ($PyCmd)" -ForegroundColor Green
+Write-Host "[1/3] Python hazir ($PyCmd) — Terminal TUI paketleri kuruluyor..." -ForegroundColor Green
+& $PyCmd -m pip install -q -r "$RepoRoot\requirements.txt" 2>$null
 
 # 2. Download official prebuilt llama.cpp (ZERO compile, ZERO Visual Studio!)
 Write-Host ""
@@ -73,6 +74,7 @@ if (-not $SkipModels) {
 Write-Host ""
 Write-Host "============================================================" -ForegroundColor Green
 Write-Host "  KURULUM TAMAMLANDI!" -ForegroundColor Green
-Write-Host "  Web Studio (Tarayici):  .\web-studio.cmd" -ForegroundColor White
-Write-Host "  VS Code OpenAI API   :  .\picocode.cmd" -ForegroundColor White
+Write-Host "  Terminal Kodlama Ajani :  .\agent.cmd" -ForegroundColor White
+Write-Host "  Web Studio (Tarayici)  :  .\web-studio.cmd" -ForegroundColor White
+Write-Host "  VS Code OpenAI API     :  .\picocode.cmd" -ForegroundColor White
 Write-Host "============================================================" -ForegroundColor Green

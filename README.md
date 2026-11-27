@@ -1,4 +1,4 @@
-# PicoCode v0.5.0 — 30 tok/s Local 30B Coding LLMs & Claude-Code-Style Terminal Agent on 4–6 GB VRAM PCs
+# PicoCode v0.6.0 — 30 tok/s Local 30B Coding LLMs & Claude-Code-Style Terminal Agent on 4–6 GB VRAM PCs
 
 > [Türkçe dokümantasyon için README.tr.md](README.tr.md)
 
@@ -61,10 +61,13 @@ Measured live on Windows 11 with desktop + browser active (`~1.65 GiB` baseline 
 ## Quick Start (Windows)
 
 ```powershell
-# 1. One-click zero-compile setup (installs llama.cpp b12720 + models)
+# 1. One-click zero-compile setup (installs llama.cpp b12807 + TUI deps + models)
 .\setup.cmd
 
-# 2. Launch Dark Web Studio (http://127.0.0.1:7870)
+# 2. Launch Claude-Code-style Terminal Agent (zero-flag project picker + Trust Gate)
+.\agent.cmd
+
+# 3. Or launch Dark Web Studio (http://127.0.0.1:7870)
 .\web-studio.cmd
 
 # 3. Or launch headless OpenAI API server for VS Code (http://127.0.0.1:8080/v1)

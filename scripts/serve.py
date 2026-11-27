@@ -127,9 +127,10 @@ def compute_hybrid_cpu_moe(
     avail_mib = avail_gib * 1024.0
 
     base_32k_q8 = float(mcfg.get("base_gpu_mib_32k_q8") or 2520)
-    # KV cache scales linearly with ctx and ~0.5x for q4_0 vs q8_0 (~1200 MiB KV component at 32K q8_0)
-    kv_32k_q8 = 1200.0
-    kv_scale = (chosen_ctx / 32768.0) * (0.55 if kv_type == "q4_0" else 1.0)
+    # KV cache scales linearly with ctx and by quantization (q4_0 ~0.55x, q8_0 1.0x, f16 ~2.0x)
+    kv_32k_q8 = float(mcfg.get("kv_32k_q8_mib") or 1200.0)
+    kv_factor = {"q4_0": 0.55, "q8_0": 1.0, "f16": 2.0}.get(kv_type, 1.0)
+    kv_scale = (chosen_ctx / 32768.0) * kv_factor
     base_mib = (base_32k_q8 - kv_32k_q8) + kv_32k_q8 * kv_scale
     safety_margin_mib = 650.0 if vram_gib <= 8.5 else 1024.0
 
@@ -268,11 +269,22 @@ def build_server_command(
         "-ub", str(ubatch_size),
         "-ctk", kv_type,
         "-fa", fa_mode,
+        "-fit", "off",
         "--poll", "100",
-        "--cache-reuse", "256",
         "--jinja",
         "--metrics",
     ]
+    # KV-shift cache reuse helps pure attention models (skip on hybrid SWA/ShortConv looped arch)
+    if arch != "moe_looped":
+        cmd += ["--cache-reuse", "256"]
+
+    # Apply per-model recommended server-side sampling defaults from registry
+    if defaults.get("temp") is not None:
+        cmd += ["--temp", str(defaults["temp"])]
+    if defaults.get("top_p") is not None:
+        cmd += ["--top-p", str(defaults["top_p"])]
+    if defaults.get("min_p") is not None:
+        cmd += ["--min-p", str(defaults["min_p"])]
 
     if fa_mode != "off":
         cmd += ["-ctv", kv_type]
@@ -280,10 +292,6 @@ def build_server_command(
     if moe_n_cpu is not None:
         cmd += ["--n-cpu-moe", str(moe_n_cpu), "--no-op-offload"]
     elif moe_cpu_offload:
-        # --no-op-offload prevents Vulkan/CUDA from allocating a ~7.6 GiB compute scratchpad
-        # for CPU MoE tensors (drops GPU VRAM from 9.28 GiB -> 2.55 GiB and speeds up pp 23x!).
-        # Note: Do NOT combine --no-host with DSpark draft decoding (causes 3x slowdown due to
-        # unpinned hidden-state transfers); use --no-host only when draft is disabled.
         cmd += ["--cpu-moe", "--no-op-offload"]
     elif moe_override:
         cmd += ["-ot", moe_override, "--no-op-offload"]
@@ -291,17 +299,19 @@ def build_server_command(
         cmd += ["--no-op-offload"]
 
     # 4. Optional DSpark / Draft model OR zero-VRAM lossless ngram-mod speculative decoding
+    # Disable VRAM-heavy DSpark / mmproj automatically when live free VRAM is critically tight (<3.2 GiB)
+    has_aux_vram = (vram_gib >= 5.0) and (live_free is None or float(live_free) >= 3.2)
     draft_active = None
     spec_active = None
     draft_key = mcfg.get("draft_file")
-    if use_draft and draft_key and draft_key in files_map and vram_gib >= 5.0:
+    if use_draft and draft_key and draft_key in files_map and has_aux_vram:
         dpath = resolve_path(files_map[draft_key]["path"])
         if dpath.exists() or allow_missing_files:
             spec_type = mcfg.get("draft_spec_type")
             if spec_type:
                 cmd += ["--spec-type", str(spec_type)]
                 spec_active = str(spec_type)
-            cmd += ["-md", str(dpath), "-ngld", "99"]
+            cmd += ["-md", str(dpath), "-ngld", "99", "-ctkd", "q8_0", "-ctvd", "q8_0"]
             if mcfg.get("draft_n_max"):
                 cmd += ["--spec-draft-n-max", str(mcfg["draft_n_max"])]
             draft_active = str(dpath)
@@ -313,13 +323,14 @@ def build_server_command(
     if (moe_n_cpu is not None or moe_cpu_offload or moe_override) and not draft_active:
         cmd += ["--no-host"]
 
-    if reasoning_budget is not None:
-        cmd += ["--reasoning-budget", str(int(reasoning_budget))]
+    eff_rb = reasoning_budget if reasoning_budget is not None else defaults.get("reasoning_budget")
+    if eff_rb is not None:
+        cmd += ["--reasoning-budget", str(int(eff_rb))]
 
     # 5. Optional Vision projector (mmproj)
     vision_active = None
     mm_key = mcfg.get("mmproj_file")
-    if use_vision and mm_key and mm_key in files_map and vram_gib >= 5.0:
+    if use_vision and mm_key and mm_key in files_map and has_aux_vram:
         mpath = resolve_path(files_map[mm_key]["path"])
         if mpath.exists() or allow_missing_files:
             cmd += ["--mmproj", str(mpath)]
@@ -574,7 +585,10 @@ def main() -> int:
     except KeyboardInterrupt:
         if proc.poll() is None:
             proc.terminate()
-            proc.wait(timeout=8)
+            try:
+                proc.wait(timeout=8)
+            except subprocess.TimeoutExpired:
+                proc.kill()
         return 0
 
 

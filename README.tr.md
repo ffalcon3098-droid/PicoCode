@@ -1,4 +1,4 @@
-# PicoCode v0.5.0 — 4–6 GB VRAM Bilgisayarlarda 30 tok/s Yerel 30B Kodlama Yapay Zekası & Claude Code Tarzı Terminal Ajanı
+# PicoCode v0.6.0 — 4–6 GB VRAM Bilgisayarlarda 30 tok/s Yerel 30B Kodlama Yapay Zekası & Claude Code Tarzı Terminal Ajanı
 
 > [For English documentation, see README.md](README.md)
 
@@ -60,10 +60,13 @@ Windows 11 üzerinde masaüstü + tarayıcı açıkken (`~1.65 GiB` taban Dedica
 ## Hızlı Başlangıç (Windows)
 
 ```powershell
-# 1. Tek tıkla kurulum (llama.cpp b12720 + model indirme, Visual Studio gerektirmez!)
+# 1. Tek tıkla kurulum (llama.cpp b12807 + TUI paketleri + model indirme, Visual Studio gerektirmez!)
 .\setup.cmd
 
-# 2. Karanlık Web Studio arayüzünü aç (http://127.0.0.1:7870)
+# 2. Claude Code tarzı Terminal Ajanını aç (proje seçici + klasör güven onayı)
+.\agent.cmd
+
+# 3. Veya karanlık Web Studio arayüzünü aç (http://127.0.0.1:7870)
 .\web-studio.cmd
 
 # 3. Veya VS Code için sadece OpenAI API sunucusunu başlat (http://127.0.0.1:8080/v1)

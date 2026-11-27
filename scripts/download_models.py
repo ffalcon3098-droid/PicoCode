@@ -130,27 +130,25 @@ def download_url_resumable(url: str, dest: pathlib.Path, expected_bytes: int = 0
     curl_ok = False
     if curl:
         has_partial = dest.exists() and dest.stat().st_size > 0
-        for try_resume in ([True, False] if has_partial else [False]):
-            cmd = [
-                curl, "-L", "--fail",
-                "--connect-timeout", "30",
-                "--retry", "6", "--retry-delay", "4",
-                "--speed-limit", "10000", "--speed-time", "45",
-                "-#",
-            ]
-            if try_resume:
-                cmd += ["-C", "-"]
-            else:
-                dest.unlink(missing_ok=True)
-            cmd += [url, "-o", str(dest)]
-            p = subprocess.run(cmd)
-            if p.returncode == 0:
-                curl_ok = True
-                break
-            print(f"  [WARN] curl cikis kodu {p.returncode} (resume={try_resume})", file=sys.stderr)
+        cmd = [
+            curl, "-L", "--fail",
+            "--connect-timeout", "30",
+            "--retry", "6", "--retry-delay", "4",
+            "--speed-limit", "10000", "--speed-time", "45",
+            "-#",
+        ]
+        if has_partial:
+            cmd += ["-C", "-"]
+        cmd += [url, "-o", str(dest)]
+        p = subprocess.run(cmd)
+        if p.returncode == 0:
+            curl_ok = True
+        else:
+            # Never delete a multi-GB partial download on transient network drop; hand off to urllib Range resume
+            print(f"  [WARN] curl cikis kodu {p.returncode} (kismi dosya korundu)", file=sys.stderr)
 
     if not curl_ok:
-        print("  [INFO] Yerlesik Python indiricisine geciliyor...")
+        print("  [INFO] Yerlesik Python indiricisine geciliyor (kaldigi yerden devam)...")
         _download_with_python_urllib(url, dest, expected_bytes)
 
     return dest.exists() and (expected_bytes <= 0 or dest.stat().st_size == expected_bytes)
@@ -166,6 +164,17 @@ def download_file(item: dict[str, Any]) -> bool:
     ok, msg, _ = check_file(item)
     print(f"  [{'OK  ' if ok else 'FAIL'}] {item['path']} — {msg}")
     return ok
+
+
+def _safe_extract_zip(zpath: pathlib.Path, target_dir: pathlib.Path) -> None:
+    """Extract zip safely while blocking Zip-Slip path traversal."""
+    root = target_dir.resolve()
+    with zipfile.ZipFile(zpath, "r") as zf:
+        for info in zf.infolist():
+            dest = (root / info.filename).resolve()
+            if not dest.is_relative_to(root):
+                raise PermissionError(f"Zip-Slip blocked: {info.filename}")
+        zf.extractall(root)
 
 
 def install_llama_engine(reg: dict[str, Any], backend: str = "vulkan") -> pathlib.Path | None:
@@ -188,8 +197,7 @@ def install_llama_engine(reg: dict[str, Any], backend: str = "vulkan") -> pathli
     for url, desc, zpath in zips_to_get:
         if not download_url_resumable(url, zpath, 0, label=desc):
             return None
-        with zipfile.ZipFile(zpath, "r") as zf:
-            zf.extractall(target_dir)
+        _safe_extract_zip(zpath, target_dir)
         zpath.unlink(missing_ok=True)
 
     # Flatten if extracted inside a single subfolder
