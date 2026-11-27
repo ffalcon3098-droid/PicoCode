@@ -27,6 +27,7 @@ SCRIPTS_DIR = REPO_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
+import agent_cli  # noqa: E402
 import download_models  # noqa: E402
 import probe_hardware  # noqa: E402
 import serve  # noqa: E402
@@ -209,6 +210,84 @@ class TestPicoCodeSuite(unittest.TestCase):
         finally:
             httpd.shutdown()
             httpd.server_close()
+
+    def test_09_terminal_agent_cli_tools_undo_and_stream(self) -> None:
+        import tempfile
+        from http.server import BaseHTTPRequestHandler
+        with tempfile.TemporaryDirectory() as td:
+            root = pathlib.Path(td)
+            (root / "calc.py").write_text("def mul(a, b):\n    return a + b\n", encoding="utf-8")
+            ws = agent_cli.AgentWorkspace(root)
+
+            # 1) Path traversal blocked
+            with self.assertRaises(PermissionError):
+                ws.safe_path("../../Windows/win.ini")
+
+            # 2) AST repo_map + instant syntax error feedback + /undo rollback
+            rmap, _ = agent_cli.execute_cli_tool(ws, "repo_map", {})
+            self.assertIn("calc.py", rmap)
+            self.assertIn("def mul()", rmap)
+
+            bad_txt, bad_chg = agent_cli.execute_cli_tool(
+                ws, "edit_file",
+                {"path": "calc.py", "target": "return a + b", "replacement": "return (a *"},
+            )
+            self.assertIn("[SYNTAX ERROR]", bad_txt)
+            self.assertIsNotNone(bad_chg)
+            self.assertEqual(ws.undo_turn([bad_chg["undo_id"]]), 1)
+            self.assertIn("return a + b", (root / "calc.py").read_text(encoding="utf-8"))
+
+            # 3) Destructive command safety guard
+            self.assertIsNotNone(agent_cli.is_dangerous_command("rm -rf /"))
+            blocked, _ = agent_cli.execute_cli_tool(ws, "run_command", {"command": "git reset --hard HEAD"}, auto_approve=True)
+            self.assertIn("Blocked destructive command", blocked)
+
+            # 4) Mock OpenAI SSE streaming turn with tool call + undo_turn
+            call_n = {"n": 0}
+
+            class MockAgentServer(BaseHTTPRequestHandler):
+                def log_message(self, fmt, *args):
+                    pass
+
+                def do_POST(self):
+                    n = int(self.headers.get("Content-Length", "0"))
+                    _ = json.loads(self.rfile.read(n).decode("utf-8"))
+                    call_n["n"] += 1
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.end_headers()
+
+                    def send(delta_obj):
+                        self.wfile.write(f"data: {json.dumps({'choices': [{'delta': delta_obj}]})}\n\n".encode("utf-8"))
+
+                    if call_n["n"] == 1:
+                        send({"tool_calls": [{"index": 0, "id": "c1", "function": {"name": "edit_file", "arguments": json.dumps({"path": "calc.py", "target": "return a + b", "replacement": "return a * b"})}}]})
+                    else:
+                        send({"content": "mul fonksiyonu duzeltildi."})
+                    self.wfile.write(b"data: [DONE]\n\n")
+                    self.wfile.flush()
+
+            srv = ThreadingHTTPServer(("127.0.0.1", 0), MockAgentServer)
+            srv.daemon_threads = True
+            t = threading.Thread(target=srv.serve_forever, daemon=True)
+            t.start()
+            try:
+                conv = [
+                    {"role": "system", "content": "sys"},
+                    {"role": "user", "content": "fix mul"},
+                ]
+                res = agent_cli.run_agent_turn(
+                    f"http://127.0.0.1:{srv.server_address[1]}/v1",
+                    "qwen3-coder-30b", ws, conv, auto_approve=True, quiet=True,
+                )
+                self.assertEqual(res["tools_called"], ["edit_file"])
+                self.assertIn("duzeltildi", res["answer"])
+                self.assertIn("return a * b", (root / "calc.py").read_text(encoding="utf-8"))
+                self.assertEqual(ws.undo_turn(), 1)
+                self.assertIn("return a + b", (root / "calc.py").read_text(encoding="utf-8"))
+            finally:
+                srv.shutdown()
+                srv.server_close()
 
 
 if __name__ == "__main__":

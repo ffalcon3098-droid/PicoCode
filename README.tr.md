@@ -1,8 +1,8 @@
-# PicoCode v0.2.0 — 4–6 GB VRAM Bilgisayarlarda 30 tok/s Yerel 30B Kodlama Yapay Zekası
+# PicoCode v0.3.0 — 4–6 GB VRAM Bilgisayarlarda 30 tok/s Yerel 30B Kodlama Yapay Zekası & Terminal Kodlama Ajanı
 
 > [For English documentation, see README.md](README.md)
 
-**PicoCode**, **Qwen3-Coder-30B-A3B (Adaptif Hibrit GPU MoE + kayıpsız `ngram-mod` ile `30.2 tok/s`'ye kadar)**, **Inkling 2 Mini (26.4B / 3.4B Looped MoE + DSpark + Vision)** ve **Qwen2.5-Coder-7B** gibi güncel açık kaynaklı kodlama modellerini sıradan **4–6 GB VRAM + 32 GB RAM** bilgisayarlarda (AMD Vulkan ve NVIDIA CUDA) **sıfır C++ derlemesi**, **VS Code uyumlu OpenAI API** ve karanlık **Web Studio** arayüzüyle çalıştırır.
+**PicoCode**, **Qwen3-Coder-30B-A3B (Adaptif Hibrit GPU MoE + kayıpsız `ngram-mod` ile `30.2 tok/s`'ye kadar)**, **Inkling 2 Mini (26.4B / 3.4B Looped MoE + DSpark + Vision)** ve **Qwen2.5-Coder-7B** gibi güncel açık kaynaklı kodlama modellerini sıradan **4–6 GB VRAM + 32 GB RAM** bilgisayarlarda (AMD Vulkan ve NVIDIA CUDA) **sıfır C++ derlemesi**, **bağımsız Terminal Kodlama Ajanı (`.\picocode.cmd agent` / `.\agent.cmd`)**, **VS Code uyumlu OpenAI API** ve karanlık **Web Studio** arayüzüyle çalıştırır.
 
 Tüm proje kodu ve varsayılan modeller **%100 Apache 2.0** lisanslıdır.
 
@@ -10,6 +10,10 @@ Tüm proje kodu ve varsayılan modeller **%100 Apache 2.0** lisanslıdır.
 
 ## Öne Çıkan Özellikler
 
+- **Bağımsız Terminal Kodlama Ajanı CLI (`v0.3.0` · `.\picocode.cmd agent` / `.\agent.cmd`):**
+  - Doğrudan terminalde çalışan 16 adımlı otonom yerel kodlama ajanı (`scripts/agent_cli.py`, sıfır dış bağımlılık): `repo_map`, `list_files`, `read_file`, `search_code`, `git_status`, `git_diff`, `edit_file`, `write_file`, `run_command`.
+  - Her düzenlemeden sonra anlık Python/JSON sözdizimi kontrolü, renkli diff önizlemesi, yıkıcı komut engeli + `[y/N]` onayı (`--yes`), tek komut `/undo` tur geri alma, salt-okunur `/plan` modu ve sunucu kapalıysa otomatik `llama-server` başlatma.
+  - İnteraktif REPL (`.\agent.cmd --dir ..\Projem`) veya tek seferlik görev (`.\agent.cmd "testleri duzelt" --dir ..\Projem --yes`).
 - **Tek Tıkla Sıfır Derlemeli Kurulum (`.\setup.cmd`):** Visual Studio veya C++ Build Tools gerektirmez! Resmi derlenmiş `llama.cpp b12807` Win64 **Vulkan** veya **CUDA 12.4** motorunu ve doğrulanmış GGUF modellerini otomatik kurar.
 - **Adaptif Hibrit GPU+RAM MoE + 0 MB VRAM Kayıpsız `ngram-mod` (`v0.2.0`):**
   - Başlatmadan önce canlı boş Dedicated VRAM'i ölçer; `650 MiB` taşma güvenliği bırakarak **`4–6` MoE uzman katmanını doğrudan 6 GB GDDR6'ya (`--n-cpu-moe N`)** alır ve tam **`32K` `q8_0` KV önbelleğini** VRAM'de tutar.

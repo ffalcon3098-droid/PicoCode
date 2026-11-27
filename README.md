@@ -1,8 +1,8 @@
-# PicoCode v0.2.0 — 30 tok/s Frontier 30B Local Coding LLMs on 4–6 GB VRAM PCs
+# PicoCode v0.3.0 — 30 tok/s Local 30B Coding LLMs & Standalone Terminal Coding Agent on 4–6 GB VRAM PCs
 
 > [Türkçe dokümantasyon için README.tr.md](README.tr.md)
 
-**PicoCode** runs frontier sparse Mixture-of-Experts (MoE) and dense local coding models — led by **Qwen3-Coder-30B-A3B (up to `30.2 tok/s` via Adaptive Hybrid GPU MoE + lossless `ngram-mod`)**, **Inkling 2 Mini (26.4B / 3.4B Looped MoE + DSpark + Vision)**, and **Qwen2.5-Coder-7B** — smoothly on ordinary **4–6 GB VRAM + 32 GB RAM** consumer PCs (AMD Vulkan & NVIDIA CUDA), with **zero C++ compilation**, **zero Visual Studio**, an **OpenAI-compatible API** for VS Code (Cline, Roo Code, Continue, OpenCode) & **PicoStudio IDE**, and a dark **Web Studio**.
+**PicoCode** runs frontier sparse Mixture-of-Experts (MoE) and dense local coding models — led by **Qwen3-Coder-30B-A3B (up to `30.2 tok/s` via Adaptive Hybrid GPU MoE + lossless `ngram-mod`)**, **Inkling 2 Mini (26.4B / 3.4B Looped MoE + DSpark + Vision)**, and **Qwen2.5-Coder-7B** — smoothly on ordinary **4–6 GB VRAM + 32 GB RAM** consumer PCs (AMD Vulkan & NVIDIA CUDA), with **zero C++ compilation**, a **Standalone Terminal Coding Agent (`.\picocode.cmd agent` / `.\agent.cmd`)**, an **OpenAI-compatible API** for VS Code (Cline, Roo Code, Continue, OpenCode) & **PicoStudio IDE**, and a dark **Web Studio**.
 
 All bundled code and default models are **100% Apache 2.0**.
 
@@ -10,6 +10,10 @@ All bundled code and default models are **100% Apache 2.0**.
 
 ## Key Highlights
 
+- **Standalone Terminal Coding Agent CLI (`v0.3.0` · `.\picocode.cmd agent` / `.\agent.cmd`):**
+  - 16-step autonomous local coding agent right in your terminal (`scripts/agent_cli.py`, zero third-party deps) with 9 safe tools (`repo_map`, `list_files`, `read_file`, `search_code`, `git_status`, `git_diff`, `edit_file`, `write_file`, `run_command`).
+  - Features instant Python/JSON syntax checks after every edit, colored unified diffs, destructive command guard + `[y/N]` approval (`--yes` for automation), per-turn `/undo` rollback, `/plan` read-only mode, and automatic `llama-server` startup.
+  - Interactive REPL (`.\agent.cmd --dir ..\MyProject`) or one-shot headless fixes (`.\agent.cmd "fix failing tests" --dir ..\MyProject --yes`).
 - **Zero-Compile Windows Setup (`.\setup.cmd`):** Automatically installs official prebuilt `llama.cpp b12807` Win64 **Vulkan** or **CUDA 12.4** binaries and verified GGUF models. **No Visual Studio or C++ Build Tools required.**
 - **Adaptive Hybrid GPU+RAM MoE + Zero-VRAM Lossless `ngram-mod` (`v0.2.0`):**
   - Reads live free VRAM before startup and places `4–6` MoE expert layers directly onto 6 GB GDDR6 (`--n-cpu-moe N`, `336 GB/s` vs `35 GB/s` DDR4) with a `650 MiB` anti-spill guard, keeping full **`32K` `q8_0` KV cache** inside VRAM.
