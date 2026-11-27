@@ -601,6 +601,7 @@ def run_agent_turn(
     plan_only: bool = False,
     auto_approve: bool = False,
     max_steps: int = 16,
+    ctx_limit: int = 32768,
     quiet: bool = False,
     ui: TerminalUI | None = None,
 ) -> dict[str, Any]:
@@ -780,7 +781,7 @@ def run_agent_turn(
             tools=len(tools_called),
             edits=len(turn_undos),
             ctx_tokens=estimate_tokens(conv),
-            ctx_limit=32768,
+            ctx_limit=ctx_limit,
         )
 
     return {
@@ -839,12 +840,105 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _auto_start_server(ui: TerminalUI, args: argparse.Namespace) -> subprocess.Popen[str] | None:
-    m_port = re.search(r":(\d+)", args.url)
-    port = m_port.group(1) if m_port else "8080"
+_MODEL_ALIASES: dict[str, str] = {
+    "qwen": "qwen3-coder-30b",
+    "qwen3": "qwen3-coder-30b",
+    "30b": "qwen3-coder-30b",
+    "inkling": "inkling2-mini",
+    "inkling2": "inkling2-mini",
+    "mini": "inkling2-mini",
+    "7b": "qwen25-coder-7b",
+    "qwen25": "qwen25-coder-7b",
+}
+
+_MODEL_SHORT_DESC: dict[str, str] = {
+    "qwen3-coder-30b": "Hızlı (18-30 tok/s · 32K · Hibrit GPU MoE)",
+    "inkling2-mini": "En Zeki (~%79 SWE-bench · Vision + DSpark)",
+    "qwen25-coder-7b": "Hafif (%100 GPU · 16 GB RAM uyumlu)",
+}
+
+
+def list_available_models() -> list[dict[str, Any]]:
+    """Read PicoCode registry and detect which GGUF models are installed locally."""
+    reg_path = REPO_ROOT / "configs" / "models_registry.json"
+    try:
+        reg = json.loads(reg_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    files = reg.get("files") or {}
+    out: list[dict[str, Any]] = []
+    for mid, mcfg in (reg.get("models") or {}).items():
+        mf_key = mcfg.get("model_file")
+        cf_key = mcfg.get("compact_file")
+        installed = False
+        for k in (mf_key, cf_key):
+            if k and k in files and (REPO_ROOT / files[k]["path"]).is_file():
+                installed = True
+                break
+        ctx_lim = int((mcfg.get("defaults") or {}).get("ctx_size_6gb", 16384))
+        out.append({
+            "id": mid,
+            "label": str(mcfg.get("label") or mid),
+            "short": _MODEL_SHORT_DESC.get(mid, str(mcfg.get("label") or mid)),
+            "installed": installed,
+            "ctx_limit": ctx_lim,
+        })
+    return out
+
+
+def resolve_model_alias(raw: str) -> str:
+    clean = (raw or "").strip().lower()
+    if clean in _MODEL_ALIASES:
+        return _MODEL_ALIASES[clean]
+    models = list_available_models()
+    for m in models:
+        if m["id"].lower() == clean:
+            return m["id"]
+    for m in models:
+        if clean and clean in m["id"].lower():
+            return m["id"]
+    return (raw or "").strip()
+
+
+def resolve_model_ctx_limit(model_id: str) -> int:
+    for m in list_available_models():
+        if m["id"] == model_id:
+            return int(m["ctx_limit"])
+    return 32768 if "qwen3" in (model_id or "").lower() else 16384
+
+
+def _extract_port(base_url: str) -> str:
+    m_port = re.search(r":(\d+)", base_url or "")
+    return m_port.group(1) if m_port else "8080"
+
+
+def _stop_server_on_port(proc: subprocess.Popen[str] | None, port: str) -> None:
+    """Cleanly terminate spawned server and any llama-server bound specifically to `port`."""
+    if proc is not None and proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+    if os.name == "nt":
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        ps = (
+            f"Get-CimInstance Win32_Process | Where-Object {{ $_.Name -eq 'llama-server.exe' "
+            f"-and ($_.CommandLine -match '--port\\s+{port}(\\s|$)') }} | "
+            f"ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}"
+        )
+        try:
+            subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, timeout=8, creationflags=flags)
+        except Exception:
+            pass
+    time.sleep(0.5)
+
+
+def _auto_start_server(ui: TerminalUI, base_url: str, model: str) -> subprocess.Popen[str] | None:
+    port = _extract_port(base_url)
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     proc = subprocess.Popen(
-        [sys.executable, str(SCRIPTS_DIR / "serve.py"), "--model", args.model, "--port", port],
+        [sys.executable, str(SCRIPTS_DIR / "serve.py"), "--model", model, "--port", port],
         cwd=str(REPO_ROOT), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         text=True, creationflags=flags,
     )
@@ -856,12 +950,12 @@ def _auto_start_server(ui: TerminalUI, args: argparse.Namespace) -> subprocess.P
         for _ in range(180):
             if proc.poll() is not None:
                 return None
-            if server_is_healthy(args.url, timeout=1.0)[0]:
+            if server_is_healthy(base_url, timeout=1.0)[0]:
                 if live is not None:
                     live.update("")
                 return proc
             if live is not None:
-                live.update(ui.render_spinner(f"{args.model} başlatılıyor (Hibrit GPU MoE + ngram-mod)... {time.perf_counter() - t0:.1f}s"))
+                live.update(ui.render_spinner(f"{model} yükleniyor... {time.perf_counter() - t0:.1f}s"))
             time.sleep(0.5)
     finally:
         if live is not None:
@@ -873,21 +967,27 @@ def main(argv: list[str] | None = None) -> int:
     init_windows_console()
     args = build_parser().parse_args(argv)
     ws = AgentWorkspace(args.dir)
-    ui = TerminalUI(get_files_fn=lambda: [rel for rel, _ in ws.walk_files(max_depth=4, max_items=300)])
+    ui = TerminalUI(
+        get_files_fn=lambda: [rel for rel, _ in ws.walk_files(max_depth=4, max_items=300)],
+        get_models_fn=list_available_models,
+    )
     spawned_proc: subprocess.Popen[str] | None = None
+    active_model = resolve_model_alias(args.model)
+    ctx_limit = resolve_model_ctx_limit(active_model)
+    port = _extract_port(args.url)
 
     ok, _ = server_is_healthy(args.url)
     if not ok and not args.no_auto_start:
         t0 = time.perf_counter()
-        spawned_proc = _auto_start_server(ui, args)
+        spawned_proc = _auto_start_server(ui, args.url, active_model)
         if spawned_proc is not None:
             ok = True
-            ui.print_ok(f"{args.model} hazır ({time.perf_counter() - t0:.1f}s · {args.url})")
+            ui.print_ok(f"{active_model} hazır ({time.perf_counter() - t0:.1f}s · {args.url})")
         else:
             ui.print_error("Yerel PicoCode sunucusu otomatik başlatılamadı.")
             return 1
     if not ok:
-        ui.print_error(f"PicoCode sunucusuna bağlanılamadı ({args.url}). Önce `picocode.cmd --model {args.model}` ile başlatın.")
+        ui.print_error(f"PicoCode sunucusuna bağlanılamadı ({args.url}). Önce `picocode.cmd --model {active_model}` ile başlatın.")
         return 1
 
     plan_only = bool(args.plan)
@@ -899,7 +999,7 @@ def main(argv: list[str] | None = None) -> int:
             at_ctx = extract_at_files(ws, args.prompt)
             conv.append({"role": "user", "content": args.prompt + at_ctx})
             run_agent_turn(
-                args.url, args.model, ws, conv,
+                args.url, active_model, ws, conv,
                 plan_only=plan_only, auto_approve=auto_approve, max_steps=args.max_steps, ui=ui,
             )
             return 0
@@ -907,7 +1007,7 @@ def main(argv: list[str] | None = None) -> int:
         git_branch, git_changes = get_git_summary(ws)
         ui.print_welcome(
             version=VERSION,
-            model=args.model,
+            model=active_model,
             workspace_name=ws.root.name,
             workspace_path=str(ws.root),
             git_branch=git_branch,
@@ -920,10 +1020,10 @@ def main(argv: list[str] | None = None) -> int:
             git_branch, git_changes = get_git_summary(ws)
             try:
                 user_in = ui.read_prompt(
-                    model=args.model,
+                    model=active_model,
                     git_branch=git_branch,
                     ctx_tokens=estimate_tokens(conv),
-                    ctx_limit=32768,
+                    ctx_limit=ctx_limit,
                     plan_only=plan_only,
                     auto_approve=auto_approve,
                 )
@@ -938,12 +1038,40 @@ def main(argv: list[str] | None = None) -> int:
             if user_in == "/help":
                 ui.print_help()
                 continue
+            if user_in == "/model" or user_in.startswith("/model "):
+                models = list_available_models()
+                arg_m = user_in[6:].strip()
+                if not arg_m:
+                    ui.print_models_table(models, active_model)
+                    continue
+                target_id = resolve_model_alias(arg_m)
+                match = next((m for m in models if m["id"] == target_id), None)
+                if not match:
+                    ui.print_error(f"Bilinmeyen model: '{arg_m}'. Kurulu modelleri görmek için `/model` yazın.")
+                    continue
+                if not match["installed"]:
+                    ui.print_error(f"'{target_id}' diske henüz indirilmemiş. Önce `setup.cmd` ile indirin.")
+                    continue
+                if target_id == active_model and server_is_healthy(args.url, timeout=1.5)[0]:
+                    ui.print_ok(f"Zaten aktif model: {active_model}")
+                    continue
+                t0 = time.perf_counter()
+                _stop_server_on_port(spawned_proc, port)
+                spawned_proc = _auto_start_server(ui, args.url, target_id)
+                if spawned_proc is None:
+                    ui.print_error(f"'{target_id}' başlatılamadı! Eski modele ({active_model}) dönülüyor...")
+                    spawned_proc = _auto_start_server(ui, args.url, active_model)
+                    continue
+                active_model = target_id
+                ctx_limit = resolve_model_ctx_limit(active_model)
+                ui.print_ok(f"Model değiştirildi → {active_model} ({time.perf_counter() - t0:.1f}s · sohbet geçmişi korundu)")
+                continue
             if user_in == "/clear":
                 conv = [{"role": "system", "content": _build_system_prompt(ws, plan_only)}]
                 ui.clear()
                 ui.print_welcome(
                     version=VERSION,
-                    model=args.model,
+                    model=active_model,
                     workspace_name=ws.root.name,
                     workspace_path=str(ws.root),
                     git_branch=git_branch,
@@ -967,10 +1095,10 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             if user_in == "/status":
                 toks = estimate_tokens(conv)
-                pct = min(100, int(round(toks / 327.68)))
+                pct = min(100, int(round((toks / max(1, ctx_limit)) * 100)))
                 ui.print_ok(
-                    f"Model: {args.model} · Proje: {ws.root.name} · Git: {git_branch or 'yok'} ({git_changes} değişiklik) · "
-                    f"Bağlam: ~{toks}/32768 tok ({pct}%) · Mod: {'PLAN' if plan_only else 'AGENT'}"
+                    f"Model: {active_model} · Proje: {ws.root.name} · Git: {git_branch or 'yok'} ({git_changes} değişiklik) · "
+                    f"Bağlam: ~{toks}/{ctx_limit} tok ({pct}%) · Mod: {'PLAN' if plan_only else 'AGENT'}"
                 )
                 continue
             if user_in == "/undo":
@@ -984,17 +1112,13 @@ def main(argv: list[str] | None = None) -> int:
             at_ctx = extract_at_files(ws, user_in)
             conv.append({"role": "user", "content": user_in + at_ctx})
             res = run_agent_turn(
-                args.url, args.model, ws, conv,
-                plan_only=plan_only, auto_approve=auto_approve, max_steps=args.max_steps, ui=ui,
+                args.url, active_model, ws, conv,
+                plan_only=plan_only, auto_approve=auto_approve, max_steps=args.max_steps, ctx_limit=ctx_limit, ui=ui,
             )
             auto_approve = bool(res.get("auto_approve", auto_approve))
     finally:
         if spawned_proc is not None and spawned_proc.poll() is None:
-            spawned_proc.terminate()
-            try:
-                spawned_proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                spawned_proc.kill()
+            _stop_server_on_port(spawned_proc, port)
     return 0
 
 

@@ -249,6 +249,13 @@ class TestPicoCodeSuite(unittest.TestCase):
             self.assertEqual(tui.format_tool_arg_preview("read_file", {"path": "calc.py", "start_line": 1, "end_line": 20}), "calc.py · L1-20")
             ui = tui.TerminalUI()
             self.assertIsNotNone(ui)
+            self.assertEqual(agent_cli.resolve_model_alias("inkling"), "inkling2-mini")
+            self.assertEqual(agent_cli.resolve_model_alias("qwen"), "qwen3-coder-30b")
+            self.assertEqual(agent_cli.resolve_model_ctx_limit("inkling2-mini"), 16384)
+            self.assertEqual(agent_cli.resolve_model_ctx_limit("qwen3-coder-30b"), 32768)
+            mods = agent_cli.list_available_models()
+            self.assertTrue(any(m["id"] == "inkling2-mini" for m in mods))
+            self.assertTrue(any(m["id"] == "qwen3-coder-30b" for m in mods))
 
             # 4) Mock OpenAI SSE streaming turn with tool call + undo_turn
             call_n = {"n": 0}

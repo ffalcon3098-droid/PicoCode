@@ -72,13 +72,14 @@ except ImportError:
 
 
 SLASH_COMMANDS: list[tuple[str, str]] = [
-    ("/help", "Komut listesini ve kısayolları göster"),
+    ("/model", "Kurulu modelleri gör veya canlı değiştir (/model inkling2-mini)"),
     ("/plan", "Salt-okunur Plan Modu aç / kapat"),
     ("/diff", "Çalışma dizinindeki Git diff özetini göster"),
     ("/undo", "Son turdaki tüm dosya değişikliklerini geri al"),
-    ("/status", "Model, bağlam penceresi, Git ve VRAM durumu"),
+    ("/status", "Model, bağlam penceresi, Git ve durum özeti"),
     ("/yes", "Kabuk komutları için otomatik onayı aç / kapat"),
     ("/clear", "Sohbet geçmişini sıfırla ve ekranı temizle"),
+    ("/help", "Komut listesini ve kısayolları göster"),
     ("/exit", "PicoCode Terminal Ajanından çık"),
 ]
 
@@ -121,21 +122,40 @@ def format_tool_arg_preview(name: str, args: dict[str, Any]) -> str:
 
 if HAS_PT:
     class PicoCompleter(Completer):
-        """Interactive dropdown autocomplete for `/` slash commands and `@file` references."""
+        """Interactive dropdown autocomplete for `/` slash commands, `/model <id>`, and `@file` references."""
 
-        def __init__(self, get_files_fn: Callable[[], list[str]]) -> None:
+        def __init__(
+            self,
+            get_files_fn: Callable[[], list[str]],
+            get_models_fn: Callable[[], list[dict[str, Any]]] | None = None,
+        ) -> None:
             self._get_files = get_files_fn
+            self._get_models = get_models_fn or (lambda: [])
 
         def get_completions(self, document, complete_event):
             text = document.text_before_cursor
-            # 1) Slash commands at start of line
+            # 1) `/model <id>` sub-completion
+            if text.lower().startswith("/model "):
+                partial = text[7:].strip().lower()
+                for m in self._get_models():
+                    mid = str(m.get("id") or "")
+                    if partial in mid.lower():
+                        tag = "✓ kurulu" if m.get("installed") else "eksik"
+                        yield Completion(
+                            mid,
+                            start_position=-len(text[7:]),
+                            display=mid,
+                            display_meta=f"{tag} · {m.get('short', '')}",
+                        )
+                return
+            # 2) Slash commands at start of line
             if text.startswith("/") and " " not in text:
                 q = text.lower()
                 for cmd, desc in SLASH_COMMANDS:
                     if cmd.startswith(q):
                         yield Completion(cmd, start_position=-len(text), display=cmd, display_meta=desc)
                 return
-            # 2) @file reference anywhere in prompt
+            # 3) @file reference anywhere in prompt
             at_pos = text.rfind("@")
             if at_pos != -1 and (at_pos == 0 or text[at_pos - 1].isspace()):
                 partial = text[at_pos + 1:]
@@ -156,11 +176,16 @@ if HAS_PT:
 class TerminalUI:
     """Rich + prompt_toolkit TUI facade with clean stdlib fallback."""
 
-    def __init__(self, get_files_fn: Callable[[], list[str]] | None = None) -> None:
+    def __init__(
+        self,
+        get_files_fn: Callable[[], list[str]] | None = None,
+        get_models_fn: Callable[[], list[dict[str, Any]]] | None = None,
+    ) -> None:
         init_windows_console()
         self.rich_enabled = HAS_RICH
         self.console = Console(highlight=False) if HAS_RICH else None
         self._get_files = get_files_fn or (lambda: [])
+        self._get_models = get_models_fn or (lambda: [])
         self._session = None
         if HAS_PT and sys.stdin.isatty():
             hist_path = pathlib.Path.home() / ".picocode_agent_history"
@@ -179,7 +204,7 @@ class TerminalUI:
             })
             self._session = PromptSession(
                 history=FileHistory(str(hist_path)),
-                completer=PicoCompleter(self._get_files),
+                completer=PicoCompleter(self._get_files, self._get_models),
                 complete_while_typing=True,
                 style=style,
             )
@@ -231,7 +256,7 @@ class TerminalUI:
         meta.add_row("Mod", mode_str)
         meta.add_row(
             "Kısayol",
-            "[#38bdf8]/help[/]  [#38bdf8]/plan[/]  [#38bdf8]/diff[/]  [#38bdf8]/undo[/]  [#38bdf8]@dosya[/]  [#64748b]· Tab tamamla · Ctrl+C iptal[/]",
+            "[#38bdf8]/model[/]  [#38bdf8]/plan[/]  [#38bdf8]/diff[/]  [#38bdf8]/undo[/]  [#38bdf8]@dosya[/]  [#64748b]· Tab tamamla · Ctrl+C iptal[/]",
         )
 
         grid = Table.grid(expand=True, padding=(0, 2))
@@ -331,6 +356,35 @@ class TerminalUI:
             tbl.add_row(c, d)
         tbl.add_row("@dosya", "Prompt içine doğrudan dosya içeriği ekle (Tab ile seç)")
         self.console.print(Panel(tbl, title="[bold #38bdf8]Komutlar[/]", border_style="#334155", box=box.ROUNDED))
+
+    def print_models_table(self, models: list[dict[str, Any]], active_model: str) -> None:
+        if not self.console:
+            for m in models:
+                st = "*" if m["id"] == active_model else ("OK" if m["installed"] else "MISSING")
+                print(f"  [{st}] {m['id']} ({m['ctx_limit'] // 1024}K) - {m['label']}")
+            return
+        tbl = Table(box=box.ROUNDED, border_style="#334155", padding=(0, 1))
+        tbl.add_column("Model ID", style="bold #38bdf8", no_wrap=True)
+        tbl.add_column("Durum", no_wrap=True)
+        tbl.add_column("Bağlam", justify="right", style="#94a3b8", no_wrap=True)
+        tbl.add_column("Özellik", style="#cbd5e1")
+        for m in models:
+            if m["id"] == active_model:
+                st = "[bold #22c55e]● Aktif[/]"
+            elif m["installed"]:
+                st = "[#38bdf8]✓ Kurulu[/]"
+            else:
+                st = "[#64748b]✗ Eksik[/]"
+            tbl.add_row(m["id"], st, f"{m['ctx_limit'] // 1024}K", m.get("short") or m.get("label", ""))
+        self.console.print(
+            Panel(
+                tbl,
+                title="[bold #38bdf8]✦ Yerel Kodlama Modelleri[/]",
+                subtitle="[#64748b]Canlı geçiş: /model inkling2-mini  veya  /model qwen3-coder-30b[/]",
+                border_style="#334155",
+                box=box.ROUNDED,
+            )
+        )
 
     def print_tool_start(self, name: str, args: dict[str, Any]) -> None:
         label, color = TOOL_DISPLAY_NAMES.get(name, (name, "#38bdf8"))
