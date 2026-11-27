@@ -265,17 +265,21 @@ def main() -> int:
     prof = args.profile
     if prof is None:
         rec, reason = recommend_profile(hw)
-        print(f"\n[PicoCode] GPU: {hw['gpu_name']} ({hw['backend'].upper()}, {hw['vram_total_gib']:.1f} GiB) | RAM: {hw['ram_total_gib']:.1f} GiB | Free Disk: {hw['disk_free_gib']:.1f} GiB")
-        print(f"           Recommended: {rec} — {reason}")
-        keys = list(profiles.keys())
-        for idx, k in enumerate(keys, 1):
-            tot = sum(int(files_map[f]["expected_bytes"]) for f in profiles[k]["required"])
-            rem = sum(check_file(files_map[f])[2] for f in profiles[k]["required"])
-            mark = " ★ Recommended" if k == rec else ""
-            print(f"  [{idx}] {k:18s} ({format_gb(tot)}, remaining {format_gb(rem)}){mark} — {profiles[k]['desc']}")
-        def_i = str(keys.index(rec) + 1)
-        ch = input(f"Select package to download [{def_i}]: ").strip() or def_i
-        prof = keys[int(ch) - 1] if ch.isdigit() and 1 <= int(ch) <= len(keys) else rec
+        if args.check:
+            prof = rec
+            print(f"[PicoCode] Checking recommended profile '{prof}' (pass --profile <name> to check another):")
+        else:
+            print(f"\n[PicoCode] GPU: {hw['gpu_name']} ({hw['backend'].upper()}, {hw['vram_total_gib']:.1f} GiB) | RAM: {hw['ram_total_gib']:.1f} GiB | Free Disk: {hw['disk_free_gib']:.1f} GiB")
+            print(f"           Recommended: {rec} — {reason}")
+            keys = list(profiles.keys())
+            for idx, k in enumerate(keys, 1):
+                tot = sum(int(files_map[f]["expected_bytes"]) for f in profiles[k]["required"])
+                rem = sum(check_file(files_map[f])[2] for f in profiles[k]["required"])
+                mark = " ★ Recommended" if k == rec else ""
+                print(f"  [{idx}] {k:18s} ({format_gb(tot)}, remaining {format_gb(rem)}){mark} — {profiles[k]['desc']}")
+            def_i = str(keys.index(rec) + 1)
+            ch = input(f"Select package to download [{def_i}]: ").strip() or def_i
+            prof = keys[int(ch) - 1] if ch.isdigit() and 1 <= int(ch) <= len(keys) else rec
 
     req_ids = profiles[prof]["required"]
     if args.check:
