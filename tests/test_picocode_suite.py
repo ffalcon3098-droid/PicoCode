@@ -31,6 +31,7 @@ import agent_cli  # noqa: E402
 import download_models  # noqa: E402
 import probe_hardware  # noqa: E402
 import serve  # noqa: E402
+import tui  # noqa: E402
 import web_ui  # noqa: E402
 
 
@@ -237,10 +238,17 @@ class TestPicoCodeSuite(unittest.TestCase):
             self.assertEqual(ws.undo_turn([bad_chg["undo_id"]]), 1)
             self.assertIn("return a + b", (root / "calc.py").read_text(encoding="utf-8"))
 
-            # 3) Destructive command safety guard
+            # 3) Destructive command safety guard & @file context extraction + TUI helpers
             self.assertIsNotNone(agent_cli.is_dangerous_command("rm -rf /"))
             blocked, _ = agent_cli.execute_cli_tool(ws, "run_command", {"command": "git reset --hard HEAD"}, auto_approve=True)
             self.assertIn("Blocked destructive command", blocked)
+
+            at_ctx = agent_cli.extract_at_files(ws, "incele @calc.py ve @../../Windows/win.ini")
+            self.assertIn("def mul", at_ctx)
+            self.assertNotIn("win.ini", at_ctx)
+            self.assertEqual(tui.format_tool_arg_preview("read_file", {"path": "calc.py", "start_line": 1, "end_line": 20}), "calc.py · L1-20")
+            ui = tui.TerminalUI()
+            self.assertIsNotNone(ui)
 
             # 4) Mock OpenAI SSE streaming turn with tool call + undo_turn
             call_n = {"n": 0}
