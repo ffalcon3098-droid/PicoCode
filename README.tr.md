@@ -1,24 +1,25 @@
-# PicoCode v0.6.0 — 4–6 GB VRAM Bilgisayarlarda 30 tok/s Yerel 30B Kodlama Yapay Zekası & Claude Code Tarzı Terminal Ajanı
+# PicoCode v0.7.0 — 4–6 GB VRAM Bilgisayarlarda Yerel 30B Kodlama Yapay Zekası & Claude Code Tarzı Terminal Ajanı
 
 > [For English documentation, see README.md](README.md)
 
-**PicoCode**, **Qwen3-Coder-30B-A3B (Adaptif Hibrit GPU MoE + kayıpsız `ngram-mod` ile `30.2 tok/s`'ye kadar)**, **Inkling 2 Mini (26.4B / 3.4B Looped MoE + DSpark + Vision)** ve **Qwen2.5-Coder-7B** gibi güncel açık kaynaklı kodlama modellerini sıradan **4–6 GB VRAM + 32 GB RAM** bilgisayarlarda (AMD Vulkan ve NVIDIA CUDA) **sıfır C++ derlemesi**, **Claude Code / OpenCode tarzı 24-bit TrueColor Terminal Kodlama Ajanı (`.\agent.cmd`)**, **VS Code uyumlu OpenAI API** ve karanlık **Web Studio** arayüzüyle çalıştırır.
+**PicoCode**, **Qwen3-Coder-30B-A3B (`--load-mode none` ile `97.5 tok/s` prompt işleme + Adaptif Hibrit GPU MoE ve kayıpsız `ngram-mod` ile `18–30 tok/s` üretim)**, **Inkling 2 Mini (26.4B / 3.4B Looped MoE + DSpark + Vision)** ve **Qwen2.5-Coder-7B** gibi güncel açık kaynaklı kodlama modellerini sıradan **4–6 GB VRAM + 32 GB RAM** bilgisayarlarda (AMD Vulkan ve NVIDIA CUDA) **sıfır C++ derlemesi**, **İngilizce ana arayüzlü 24-bit TrueColor Terminal Kodlama Ajanı (`.\agent.cmd`)**, **VS Code uyumlu OpenAI API** ve güvenlik sertleştirmeli **Web Studio** ile çalıştırır.
 
 Tüm proje kodu ve varsayılan modeller **%100 Apache 2.0** lisanslıdır.
 
 ---
 
-## Öne Çıkan Özellikler
+## Öne Çıkan Özellikler (`v0.7.0`)
 
-- **Claude Code Tarzı 24-bit Terminal Kodlama Ajanı (`v0.5.0` · `.\agent.cmd` / `.\picocode.cmd agent`):**
-  - **Klasör Güven Onayı (`Trust Folder`) & Etkileşimli Proje Seçici (`/project` / `/cd`):** `.\agent.cmd` komutu argümansız açıldığında proje seçtirir, ilk girişte güven onayı (`Güven` / `Salt-okunur Plan` / `Çık`) sorar ve oturum içinde modeli kapatmadan **0 saniyede** proje değiştirir.
-  - **Dosya Gezgini, Bağlam Sabitleme & Canlı Model Değiştirme:** `/files`, `/add <dosya>` (`Tab`), `/drop`, `@dosya` otomatik tamamlama ve sohbeti kaybetmeden `/model inkling` ↔ `/model qwen` geçişi.
-  - Zengin 24-bit TrueColor TUI (`scripts/tui.py` + `scripts/agent_cli.py`): yuvarlak kutulu 2 sütunlu karşılama kartı + degrade `PICOCODE` logosu, animasyonlu braille spinner (`⠋`), canlı sözdizimi renklendirmeli Markdown akışı, `● Tool(args)` / `⎿` ağaç kartları, kırmızı/yeşil Diff Kutuları ve alt durum şeridi (`mod · model · proje · git · sabit · ctx%`).
-- **Tek Tıkla Sıfır Derlemeli Kurulum (`.\setup.cmd`):** Visual Studio veya C++ Build Tools gerektirmez! Resmi derlenmiş `llama.cpp b12807` Win64 **Vulkan** veya **CUDA 12.4** motorunu ve doğrulanmış GGUF modellerini otomatik kurar.
-- **Adaptif Hibrit GPU+RAM MoE + 0 MB VRAM Kayıpsız `ngram-mod` (`v0.2.0`):**
-  - Başlatmadan önce canlı boş Dedicated VRAM'i ölçer; `650 MiB` taşma güvenliği bırakarak **`4–6` MoE uzman katmanını doğrudan 6 GB GDDR6'ya (`--n-cpu-moe N`)** alır ve tam **`32K` `q8_0` KV önbelleğini** VRAM'de tutar.
-  - **`--spec-type ngram-mod`** (0 MB VRAM, %100 kayıpsız spekülatif çözümleme), **`--poll 100`**, **`--cache-reuse 256`** ve **`-b 2048 -ub 512 -tb 12`** ile sıfırdan kodda **`18.3–18.9 tok/s`**, gerçek kod düzenleme/refactor işlerinde **`30.2 tok/s` (`232/232` %100 kabul!)** hızına ulaşır.
-- **Canlı VRAM Koruması:** Tarayıcı veya masaüstü fazla VRAM tüketiyorsa GPU MoE katman sayısını ve bağlamı otomatik daraltarak WDDM takılmasını önler.
+- **Claude Code Tarzı 24-bit Terminal Kodlama Ajanı (`.\agent.cmd` / `.\picocode.cmd agent`):**
+  - **İngilizce Varsayılan Arayüz (Çok Dilli Model Yanıtı):** TUI, Web Studio, kurulum ve CLI çıktıları evrensel İngilizce standarttadır; model ise sorduğunuz dilde (Türkçe/İngilizce) yanıt verir.
+  - **Gerçek Projeler & İnceleme (Review) İçin 10 Araç:** `project_overview` (tek adımda mimari/manifest/sıcak dosya özeti), çok dilli `repo_map` (Python, JS/TS, **Rust `.rs` + `#[tauri::command]`**, **Go `.go`**), `read_file`, `search_code`, `list_files`, `git_status`, `git_diff`, `edit_file` (anlık syntax kontrolü + CRLF koruma), `write_file` ve `run_command`.
+  - **%100 KV-Cache Koruması & Garantili Final Sentez:** Final adımda `tools` şemasını sabit tutup `tool_choice="none"` göndererek `f_keep = 1.000` KV-cache isabeti korur; adım-başı paralel çıktı bütçesi ve kanıt-öncelikli inceleme kuralıyla yanlış alarmları engeller.
+  - **Klasör Güven Onayı (`Trust Folder`), Proje Seçici (`/project` / `/cd`), Dosya Sabitleme (`/add` / `/drop`) & Canlı `/model` Geçişi:** Model VRAM'de sıcak kalırken **0 saniyede** proje değiştirir, sohbeti kaybetmeden `/model inkling` ↔ `/model qwen` geçişi yapar.
+- **Tek Tıkla Sıfır Derlemeli Kurulum (`.\setup.cmd`):** Visual Studio gerektirmez! Resmi `llama.cpp b12807` Win64 **Vulkan/CUDA**, TUI paketleri ve doğrulanmış GGUF modellerini (Zip-Slip korumalı ve kaldığı yerden devam eden indiriciyle) kurar.
+- **RX 5600 XT 6 GB + 32 GB RAM Ampirik Optimizasyonları:**
+  - **`Qwen3-Coder-30B-A3B`:** `--n-cpu-moe 42` (`6` GPU MoE), **`--load-mode none`** (`+18.1%` pp: `82.5 → 97.45 tok/s`, `20.24 tok/s` tg), **`-b 1024 -ub 256 -t 6 -tb 12`** ve `0 MB VRAM` kayıpsız `ngram-mod`.
+  - **`Inkling 2 Mini`:** **`-b 1024 -ub 512 -t 6 -tb 12 --cpu-moe --no-op-offload --no-reasoning-preserve`** + `DSpark` (`q8_0` draft KV, `%64–83` kabul) + Vision `mmproj`.
+- **5 ms Native Windows PDH VRAM Ölçümü & Web Studio Güvenlik Kalkanı:** `pdh.dll` ile anlık Dedicated/Shared VRAM ölçümü ve `http://127.0.0.1:7870` üzerinde tam Host + Origin + Content-Type + CSRF (`X-PicoCode-Token`) koruması.
 
 ---
 

@@ -48,7 +48,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 from tui import TerminalUI, init_windows_console  # noqa: E402
 
-VERSION = "0.6.0"
+VERSION = "0.7.0"
 
 IGNORE_DIRS = {
     ".git", "__pycache__", "node_modules", ".venv", "venv",
@@ -767,11 +767,11 @@ def _summarize_tool_output(name: str, res_txt: str) -> str:
     if name == "read_file" and lines:
         return lines[0]
     if name == "repo_map" and lines:
-        return lines[0].rstrip(":") + f" ({max(0, len(lines) - 1)} satır sembol)"
+        return lines[0].rstrip(":") + f" ({max(0, len(lines) - 1)} symbol lines)"
     if name == "list_files":
-        return f"{len(lines)} öğe listelendi"
+        return f"{len(lines)} entries listed"
     if name == "search_code":
-        return lines[0] if lines[0].startswith("No matches") else f"{len(lines)} eşleşme bulundu"
+        return lines[0] if lines[0].startswith("No matches") else f"{len(lines)} matches found"
     if name == "run_command":
         rc_ln = lines[0] if lines else "exit_code=0"
         tail = lines[-1][:90] if len(lines) > 1 else ""
@@ -814,7 +814,7 @@ def run_agent_turn(
             choice = ui.confirm_command(cmd)
             if choice == "a":
                 session_auto_approve = True
-                ui.print_ok("Bu oturumda güvenli komutlar otomatik onaylanacak.")
+                ui.print_ok("Safe shell commands will be auto-approved for this session.")
                 return True
             return choice == "y"
         return False
@@ -829,8 +829,8 @@ def run_agent_turn(
                 conv.append({
                     "role": "user",
                     "content": (
-                        "İnceleme adımları tamamlandı. Başka araç çağırma; şimdiye kadar okuduğun gerçek dosyalara "
-                        "dayanarak net, somut, dosya adlarıyla desteklenmiş kapsamlı final yanıtını yaz."
+                        "Inspection steps complete. Do not call any more tools; write a clear, concrete, "
+                        "file-and-line-cited final answer in the user's language based strictly on the files you read."
                     ),
                 })
             sampling = get_model_sampling_params(model)
@@ -862,7 +862,7 @@ def run_agent_turn(
             live = (ui.make_live_stream() if (ui is not None and not quiet) else None)
             if live is not None:
                 live.__enter__()
-                lbl = "Final yanıt yazılıyor..." if force_final else f"Düşünüyor... (adım {step}/{max_steps})"
+                lbl = "Writing final answer..." if force_final else f"Thinking... (step {step}/{max_steps})"
                 live.update(ui.render_spinner(lbl))
             try:
                 with urllib.request.urlopen(req, timeout=360) as resp:
@@ -885,7 +885,7 @@ def run_agent_turn(
                         if delta.get("reasoning_content") and live is not None and not step_text:
                             now = time.perf_counter()
                             if now - last_draw > 0.12:
-                                live.update(ui.render_spinner(f"Akıl yürütüyor... {now - step_t0:.1f}s"))
+                                live.update(ui.render_spinner(f"Reasoning... {now - step_t0:.1f}s"))
                                 last_draw = now
                         if delta.get("content"):
                             c_txt = delta["content"]
@@ -915,10 +915,10 @@ def run_agent_turn(
                             if fn.get("arguments"):
                                 ent["function"]["arguments"] += fn["arguments"]
                             if live is not None and not step_text:
-                                fn_disp = ent["function"]["name"] or "araç"
-                                live.update(ui.render_spinner(f"Araç hazırlanıyor: {fn_disp}..."))
+                                fn_disp = ent["function"]["name"] or "tool"
+                                live.update(ui.render_spinner(f"Preparing tool: {fn_disp}..."))
             except (urllib.error.URLError, OSError, TimeoutError) as exc:
-                step_err = f"Sunucu bağlantı/HTTP hatası: {exc}"
+                step_err = f"Server connection/HTTP error: {exc}"
             finally:
                 if live is not None:
                     if step_text:
@@ -993,7 +993,7 @@ def run_agent_turn(
                         if per_call_cap and fn_name in READONLY_TOOLS and len(res_txt) > per_call_cap:
                             res_txt = (
                                 res_txt[:per_call_cap].rstrip()
-                                + "\n... [paralel adım bütçesi nedeniyle kırpıldı; devamı için read_file(start_line, end_line) çağırın]"
+                                + "\n... [truncated for parallel step budget; call read_file(start_line, end_line) for more]"
                             )
 
                     if chg:
@@ -1018,7 +1018,7 @@ def run_agent_turn(
     except KeyboardInterrupt:
         cancelled = True
         if ui is not None and not quiet:
-            ui.print_warn("İptal edildi (Ctrl+C).")
+            ui.print_warn("Cancelled (Ctrl+C).")
 
     if turn_undos:
         ws.turn_history.append(turn_undos)
@@ -1222,9 +1222,9 @@ _MODEL_ALIASES: dict[str, str] = {
 }
 
 _MODEL_SHORT_DESC: dict[str, str] = {
-    "qwen3-coder-30b": "Hızlı (18-30 tok/s · 32K · Hibrit GPU MoE)",
-    "inkling2-mini": "En Zeki (~%79 SWE-bench · Vision + DSpark)",
-    "qwen25-coder-7b": "Hafif (%100 GPU · 16 GB RAM uyumlu)",
+    "qwen3-coder-30b": "Fast (18–30 tok/s · 32K · Hybrid GPU MoE)",
+    "inkling2-mini": "Smartest (~79% SWE-bench · Vision + DSpark)",
+    "qwen25-coder-7b": "Compact (100% GPU · 16 GB RAM friendly)",
 }
 
 
@@ -1336,7 +1336,7 @@ def _auto_start_server(ui: TerminalUI, base_url: str, model: str) -> subprocess.
                     live.update("")
                 return proc
             if live is not None:
-                live.update(ui.render_spinner(f"{model} yükleniyor... {time.perf_counter() - t0:.1f}s"))
+                live.update(ui.render_spinner(f"Loading {model}... {time.perf_counter() - t0:.1f}s"))
             time.sleep(0.5)
         _stop_server_on_port(proc, port)
         return None
@@ -1355,11 +1355,11 @@ def _resolve_project_target(raw: str, current_root: pathlib.Path, projects: list
         name = clean[4:].strip()
         cand_name = pathlib.Path(name)
         if not name or cand_name.is_absolute() or len(cand_name.parts) != 1 or name in (".", "..") or any(c in name for c in ("/", "\\", ":")):
-            raise ValueError("Gecersiz yeni proje adi (sadece tek klasor adi girin).")
+            raise ValueError("Invalid project name (provide a single folder name only).")
         base = (REPO_ROOT.parent if REPO_ROOT.parent.is_dir() else current_root.parent).resolve()
         target = (base / name).resolve()
         if not target.is_relative_to(base):
-            raise PermissionError("Proje kok dizini disinda klasor olusturulamaz.")
+            raise PermissionError("Cannot create project folder outside the projects root.")
         target.mkdir(parents=True, exist_ok=True)
         return target
     for p in projects:
@@ -1372,7 +1372,7 @@ def _resolve_project_target(raw: str, current_root: pathlib.Path, projects: list
             return sib
         cand = (current_root / cand).resolve()
     if not cand.is_dir():
-        raise FileNotFoundError(f"Klasor bulunamadi: {clean}")
+        raise FileNotFoundError(f"Folder not found: {clean}")
     return cand
 
 
@@ -1382,7 +1382,7 @@ def main(argv: list[str] | None = None) -> int:
     trust_store = TrustStore()
     is_interactive = (args.prompt is None) and sys.stdin.isatty()
 
-    # Determine initial workspace — if launched interactively without `--dir` from PicoCode folder, show Project Picker!
+    # Determine initial workspace — if launched interactively without `--dir`, show Project Picker!
     initial_dir = pathlib.Path(args.dir).resolve() if args.dir else pathlib.Path.cwd().resolve()
     pinned_files: list[str] = []
     ws_holder: dict[str, AgentWorkspace] = {"ws": AgentWorkspace(initial_dir)}
@@ -1397,7 +1397,7 @@ def main(argv: list[str] | None = None) -> int:
     if is_interactive and args.dir is None:
         projs = discover_projects(initial_dir, trust_store)
         if len(projs) > 1:
-            choice = ui.pick_project_interactive(projs, str(initial_dir), title="📁 Hangi Proje Klasöründe Çalışalım?")
+            choice = ui.pick_project_interactive(projs, str(initial_dir), title="📁 Which project folder should we open?")
             if choice:
                 try:
                     chosen_dir = _resolve_project_target(choice, initial_dir, projs)
@@ -1418,16 +1418,16 @@ def main(argv: list[str] | None = None) -> int:
             decision = ui.prompt_trust_folder(str(ws.root))
             if decision == "trust":
                 trust_store.trust(ws.root)
-                ui.print_ok(f"Güvenilen klasör kaydedildi: {ws.root.name}")
+                ui.print_ok(f"Trusted folder saved: {ws.root.name}")
             elif decision == "plan":
                 plan_only = True
-                ui.print_warn("Klasör salt-okunur Plan Modunda açıldı (dosyalar değiştirilmeyecek).")
+                ui.print_warn("Opened in read-only Plan Mode (no files will be modified).")
             else:
-                ui.print_info("İşlem iptal edildi.")
+                ui.print_info("Cancelled.")
                 return 0
         else:
             plan_only = True
-            ui.print_warn(f"'{ws.root.name}' güvenilen klasör değil — tek seferlik çalıştırma salt-okunur Plan Modunda sınırlandı (yazma için `--trust` ekleyin).")
+            ui.print_warn(f"'{ws.root.name}' is not a trusted folder — one-shot run restricted to read-only Plan Mode (pass `--trust` to allow edits).")
 
     spawned_proc: subprocess.Popen[str] | None = None
     active_model = resolve_model_alias(args.model)
@@ -1440,12 +1440,12 @@ def main(argv: list[str] | None = None) -> int:
         spawned_proc = _auto_start_server(ui, args.url, active_model)
         if spawned_proc is not None:
             ok = True
-            ui.print_ok(f"{active_model} hazır ({time.perf_counter() - t0:.1f}s · {args.url})")
+            ui.print_ok(f"{active_model} ready ({time.perf_counter() - t0:.1f}s · {args.url})")
         else:
-            ui.print_error("Yerel PicoCode sunucusu otomatik başlatılamadı.")
+            ui.print_error("Could not auto-start the local PicoCode server.")
             return 1
     if not ok:
-        ui.print_error(f"PicoCode sunucusuna bağlanılamadı ({args.url}). Önce `picocode.cmd --model {active_model}` ile başlatın.")
+        ui.print_error(f"Could not connect to PicoCode server ({args.url}). Start it first with `picocode.cmd --model {active_model}`.")
         return 1
 
     conv: list[dict[str, Any]] = [{"role": "system", "content": _build_system_prompt(ws, plan_only, pinned_files, trusted=trust_store.is_trusted(ws.root))}]
@@ -1491,12 +1491,12 @@ def main(argv: list[str] | None = None) -> int:
                     pinned_count=len(pinned_files),
                 )
             except (EOFError, KeyboardInterrupt):
-                ui.print_info("Görüşmek üzere 👋")
+                ui.print_info("Goodbye 👋")
                 break
             if not user_in:
                 continue
             if user_in in ("/exit", "/quit", "exit", "quit"):
-                ui.print_info("Görüşmek üzere 👋")
+                ui.print_info("Goodbye 👋")
                 break
             if user_in == "/help":
                 ui.print_help()
@@ -1523,27 +1523,27 @@ def main(argv: list[str] | None = None) -> int:
                     elif dec == "plan":
                         plan_only = True
                     else:
-                        ui.print_warn("Proje değişikliği iptal edildi.")
+                        ui.print_warn("Project switch cancelled.")
                         continue
                 ws = AgentWorkspace(new_dir)
                 ws_holder["ws"] = ws
                 pinned_files.clear()
-                conv = [{"role": "system", "content": _build_system_prompt(ws, plan_only, pinned_files)}]
-                ui.print_ok(f"Proje değiştirildi → {ws.root.name} ({ws.root}) [model VRAM'de sıcak kaldı · 0s]")
+                conv = [{"role": "system", "content": _build_system_prompt(ws, plan_only, pinned_files, trusted=trust_store.is_trusted(ws.root))}]
+                ui.print_ok(f"Switched project → {ws.root.name} ({ws.root}) [model stayed warm in VRAM · 0s]")
                 _show_welcome()
                 continue
             if user_in == "/trust" or user_in.startswith("/trust "):
                 sub = user_in[6:].strip().lower()
                 if sub == "add":
                     trust_store.trust(ws.root)
-                    ui.print_ok(f"Güvenilen klasörlere eklendi: {ws.root}")
+                    ui.print_ok(f"Added to trusted folders: {ws.root}")
                 elif sub in ("remove", "rm", "revoke"):
                     if trust_store.untrust(ws.root):
                         plan_only = True
-                        conv[0] = {"role": "system", "content": _build_system_prompt(ws, plan_only, pinned_files)}
-                        ui.print_warn(f"Güven kaldırıldı ve Plan Moduna geçildi: {ws.root}")
+                        conv[0] = {"role": "system", "content": _build_system_prompt(ws, plan_only, pinned_files, trusted=False)}
+                        ui.print_warn(f"Trust revoked; switched to read-only Plan Mode: {ws.root}")
                     else:
-                        ui.print_info("Bu klasör zaten güvenilenler listesinde değil.")
+                        ui.print_info("This folder is not in the trusted list.")
                 else:
                     ui.print_trusted_table(trust_store.list_trusted(), str(ws.root))
                 continue
@@ -1558,20 +1558,20 @@ def main(argv: list[str] | None = None) -> int:
                 rel = user_in[4:].strip()
                 if not rel:
                     if pinned_files:
-                        ui.print_ok("Bağlama sabitlenmiş dosyalar: " + ", ".join(pinned_files))
+                        ui.print_ok("Pinned files: " + ", ".join(pinned_files))
                     else:
-                        ui.print_info("Sabitlenmiş dosya yok. Eklemek için `/add dosya.py` (Tab ile seçin).")
+                        ui.print_info("No pinned files. Use `/add file.py` (Tab to autocomplete).")
                     continue
                 try:
                     p = ws.safe_path(rel)
                     if not p.is_file():
-                        ui.print_error(f"Dosya bulunamadı: {rel}")
+                        ui.print_error(f"File not found: {rel}")
                         continue
                     rel_norm = p.relative_to(ws.root).as_posix()
                     if rel_norm not in pinned_files:
                         pinned_files.append(rel_norm)
-                    conv[0] = {"role": "system", "content": _build_system_prompt(ws, plan_only, pinned_files)}
-                    ui.print_ok(f"Bağlama sabitlendi: 📎 {rel_norm} (toplam {len(pinned_files)} dosya)")
+                    conv[0] = {"role": "system", "content": _build_system_prompt(ws, plan_only, pinned_files, trusted=trust_store.is_trusted(ws.root))}
+                    ui.print_ok(f"Pinned to context: 📎 {rel_norm} ({len(pinned_files)} total)")
                 except Exception as exc:
                     ui.print_error(str(exc))
                 continue
@@ -1580,13 +1580,13 @@ def main(argv: list[str] | None = None) -> int:
                 if not rel:
                     pinned_files.clear()
                     conv[0] = {"role": "system", "content": _build_system_prompt(ws, plan_only, pinned_files, trusted=trust_store.is_trusted(ws.root))}
-                    ui.print_ok("Tüm sabitlenmiş dosyalar bağlamdan çıkarıldı.")
+                    ui.print_ok("Unpinned all files from context.")
                 elif rel in pinned_files:
                     pinned_files.remove(rel)
                     conv[0] = {"role": "system", "content": _build_system_prompt(ws, plan_only, pinned_files, trusted=trust_store.is_trusted(ws.root))}
-                    ui.print_ok(f"Bağlamdan çıkarıldı: {rel}")
+                    ui.print_ok(f"Unpinned from context: {rel}")
                 else:
-                    ui.print_warn(f"Sabitli dosya bulunamadı: {rel}")
+                    ui.print_warn(f"Pinned file not found: {rel}")
                 continue
             if user_in == "/model" or user_in.startswith("/model "):
                 models = list_available_models()
@@ -1595,37 +1595,37 @@ def main(argv: list[str] | None = None) -> int:
                     ui.print_models_table(models, active_model)
                     continue
                 if not _is_local_url(args.url) or args.no_auto_start:
-                    ui.print_error("Uzak sunucuda veya --no-auto-start modunda canlı /model değiştirme devre dışı.")
+                    ui.print_error("Live /model switching is disabled on remote servers or in --no-auto-start mode.")
                     continue
                 target_id = resolve_model_alias(arg_m)
                 match = next((m for m in models if m["id"] == target_id), None)
                 if not match:
-                    ui.print_error(f"Bilinmeyen model: '{arg_m}'. Kurulu modelleri görmek için `/model` yazın.")
+                    ui.print_error(f"Unknown model: '{arg_m}'. Run `/model` to list available models.")
                     continue
                 if not match["installed"]:
-                    ui.print_error(f"'{target_id}' diske henüz indirilmemiş (veya yarım kalmış). Önce `setup.cmd` ile indirin.")
+                    ui.print_error(f"'{target_id}' is not downloaded yet (or incomplete). Install it first with `setup.cmd`.")
                     continue
                 if target_id == active_model and server_is_healthy(args.url, timeout=1.5)[0]:
-                    ui.print_ok(f"Zaten aktif model: {active_model}")
+                    ui.print_ok(f"Already running: {active_model}")
                     continue
                 t0 = time.perf_counter()
                 _stop_server_on_port(spawned_proc, port)
                 spawned_proc = _auto_start_server(ui, args.url, target_id)
                 if spawned_proc is None:
-                    ui.print_error(f"'{target_id}' başlatılamadı! Eski modele ({active_model}) dönülüyor...")
+                    ui.print_error(f"Failed to start '{target_id}'! Rolling back to {active_model}...")
                     spawned_proc = _auto_start_server(ui, args.url, active_model)
                     if spawned_proc is None:
-                        ui.print_error("Eski model de başlatılamadı. `/exit` ile çıkıp yeniden deneyin.")
+                        ui.print_error("Rollback also failed. Type `/exit` and restart.")
                     continue
                 active_model = target_id
                 ctx_limit = resolve_model_ctx_limit(active_model)
                 if estimate_tokens(conv) > int(ctx_limit * 0.72):
                     conv[:] = compact_messages(conv, ctx_limit=ctx_limit, high_water_ratio=0.5)
-                    ui.print_warn(f"Yeni model bağlamı ({ctx_limit // 1024}K) için eski araç çıktıları sıkıştırıldı.")
-                ui.print_ok(f"Model değiştirildi → {active_model} ({time.perf_counter() - t0:.1f}s · sohbet geçmişi korundu)")
+                    ui.print_warn(f"Compacted older tool outputs to fit the new model's {ctx_limit // 1024}K context.")
+                ui.print_ok(f"Switched model → {active_model} ({time.perf_counter() - t0:.1f}s · chat history preserved)")
                 continue
             if user_in == "/clear":
-                conv = [{"role": "system", "content": _build_system_prompt(ws, plan_only, pinned_files)}]
+                conv = [{"role": "system", "content": _build_system_prompt(ws, plan_only, pinned_files, trusted=trust_store.is_trusted(ws.root))}]
                 ui.clear()
                 _show_welcome()
                 continue
@@ -1633,37 +1633,37 @@ def main(argv: list[str] | None = None) -> int:
                 if plan_only and not trust_store.is_trusted(ws.root):
                     dec = ui.prompt_trust_folder(str(ws.root))
                     if dec != "trust":
-                        ui.print_warn("Güven onayı verilmedi; salt-okunur Plan Modunda kalınıyor.")
+                        ui.print_warn("Folder trust declined; staying in read-only Plan Mode.")
                         continue
                     trust_store.trust(ws.root)
                 plan_only = not plan_only
-                conv[0] = {"role": "system", "content": _build_system_prompt(ws, plan_only, pinned_files)}
-                ui.print_ok(f"Plan Modu: {'AÇIK (salt-okunur)' if plan_only else 'KAPALI (tam ajan)'}")
+                conv[0] = {"role": "system", "content": _build_system_prompt(ws, plan_only, pinned_files, trusted=trust_store.is_trusted(ws.root))}
+                ui.print_ok(f"Plan Mode: {'ON (read-only)' if plan_only else 'OFF (full agent)'}")
                 continue
             if user_in == "/yes":
                 auto_approve = not auto_approve
-                ui.print_ok(f"Kabuk komutu otomatik onay: {'AÇIK' if auto_approve else 'KAPALI'}")
+                ui.print_ok(f"Shell command auto-approval: {'ON' if auto_approve else 'OFF'}")
                 continue
             if user_in == "/diff":
                 _, out = _run_git(ws, ["diff", "--stat"])
-                ui.print_info(out or "(unstaged git değişikliği yok)")
+                ui.print_info(out or "(no unstaged git changes)")
                 continue
             if user_in == "/status":
                 toks = estimate_tokens(conv)
                 pct = min(100, int(round((toks / max(1, ctx_limit)) * 100)))
-                trust_lbl = "Güvenli" if trust_store.is_trusted(ws.root) else "Salt-Okunur"
-                pin_lbl = f" · Sabit: {len(pinned_files)} dosya" if pinned_files else ""
+                trust_lbl = "Trusted" if trust_store.is_trusted(ws.root) else "Read-Only"
+                pin_lbl = f" · Pinned: {len(pinned_files)}" if pinned_files else ""
                 ui.print_ok(
-                    f"Model: {active_model} · Proje: {ws.root.name} ({trust_lbl}) · Git: {git_branch or 'yok'} ({git_changes}) · "
-                    f"Bağlam: ~{toks}/{ctx_limit} tok ({pct}%) · Mod: {'PLAN' if plan_only else 'AGENT'}{pin_lbl}"
+                    f"Model: {active_model} · Project: {ws.root.name} ({trust_lbl}) · Git: {git_branch or 'none'} ({git_changes}) · "
+                    f"Context: ~{toks}/{ctx_limit} tok ({pct}%) · Mode: {'PLAN' if plan_only else 'AGENT'}{pin_lbl}"
                 )
                 continue
             if user_in == "/undo":
                 n = ws.undo_turn()
                 if n:
-                    ui.print_ok(f"Son turdaki {n} dosya değişikliği geri alındı.")
+                    ui.print_ok(f"Reverted {n} file edit{'s' if n != 1 else ''} from the last turn.")
                 else:
-                    ui.print_warn("Geri alınacak değişiklik yok.")
+                    ui.print_warn("Nothing to undo.")
                 continue
 
             at_ctx = extract_at_files(ws, user_in)

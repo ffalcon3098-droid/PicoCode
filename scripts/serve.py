@@ -203,8 +203,8 @@ def build_server_command(
         capped = min(chosen_ctx, 8192)
         if capped < chosen_ctx:
             live_warning = (
-                f"Canli bos VRAM dusuk ({live_free:.2f} GiB) — WDDM tasmasini onlemek icin "
-                f"baglam {chosen_ctx} -> {capped} dusuruldu."
+                f"Live free VRAM is low ({live_free:.2f} GiB) — capped context "
+                f"{chosen_ctx} -> {capped} to avoid WDDM Shared VRAM thrashing."
             )
             chosen_ctx = capped
 
@@ -478,14 +478,14 @@ def run_benchmark(cmd: list[str], plan: dict[str, Any], host: str, port: int, ma
         draft_acc = timings.get("draft_n_accepted")
         draft_tot = timings.get("draft_n")
 
-        print("\n================ BENCHMARK SONUCU ================")
-        print(f"  Yukleme suresi    : {load_s:.2f} s")
-        print(f"  Istek suresi      : {req_s:.2f} s")
+        print("\n================ BENCHMARK RESULT ================")
+        print(f"  Model load time   : {load_s:.2f} s")
+        print(f"  Request time      : {req_s:.2f} s")
         print(f"  Prompt eval (pp)  : {pp_tps:.2f} tok/s" if isinstance(pp_tps, (int, float)) else f"  Prompt tokens     : {usage.get('prompt_tokens')}")
-        print(f"  Uretim hizi (tg)  : {tg_tps:.2f} tok/s" if isinstance(tg_tps, (int, float)) else f"  Completion tokens : {usage.get('completion_tokens')}")
+        print(f"  Generation (tg)   : {tg_tps:.2f} tok/s" if isinstance(tg_tps, (int, float)) else f"  Completion tokens : {usage.get('completion_tokens')}")
         if draft_tot:
             rate = (draft_acc or 0) / max(1, draft_tot) * 100.0
-            print(f"  DSpark Kabul Orani: {draft_acc}/{draft_tot} ({rate:.1f}%)")
+            print(f"  DSpark Acceptance : {draft_acc}/{draft_tot} ({rate:.1f}%)")
         print(f"  Peak Dedicated    : {peak_ded:.0f} MiB ({peak_ded/1024:.2f} GiB)")
         print(f"  Peak Shared       : {peak_shr:.0f} MiB ({peak_shr/1024:.2f} GiB)")
         print("--------------------------------------------------")
@@ -532,7 +532,7 @@ def main() -> int:
 
     server_exe = find_llama_server(hw.get("backend", "vulkan"))
     if server_exe is None and not args.dry_run:
-        print("HATA: llama-server.exe bulunamadi! Once `py scripts\\download_models.py --install-engine auto` calistirin.", file=sys.stderr)
+        print("ERROR: llama-server.exe not found! Run `py scripts\\download_models.py --install-engine auto` first.", file=sys.stderr)
         return 1
 
     try:
@@ -557,7 +557,7 @@ def main() -> int:
     except FileNotFoundError as exc:
         prof_map = {"qwen3-coder-30b": "qwen3-coder", "qwen25-coder-7b": "starter-7b", "inkling2-mini": "inkling2-mini"}
         prof_hint = prof_map.get(model_id, model_id)
-        print(f"HATA: {exc}\nModeli indirmek icin: py scripts\\download_models.py --profile {prof_hint}", file=sys.stderr)
+        print(f"ERROR: {exc}\nDownload model with: py scripts\\download_models.py --profile {prof_hint}", file=sys.stderr)
         return 1
 
     if args.dry_run:
@@ -571,13 +571,13 @@ def main() -> int:
     print(f"  PicoCode OpenAI API Server — {plan['label']}")
     print("============================================================")
     print(f"  GPU / Backend : {plan['gpu_name']} ({plan['backend'].upper()}, {plan['vram_total_gib']:.1f} GiB VRAM)")
-    print(f"  MoE Offload   : {plan['moe_cpu_override'] or 'Tam GPU (-ngl ' + str(plan['n_gpu_layers']) + ')'}")
-    print(f"  Baglam / KV   : {plan['ctx_size']} token | KV={plan['kv_cache']} | FA={plan['flash_attn']} | Threads={plan['threads']}")
-    print(f"  DSpark / Viz  : Draft={'AKTIF' if plan['draft_model'] else 'KAPALI'} | Vision={'AKTIF' if plan['mmproj_model'] else 'KAPALI'}")
+    print(f"  MoE Offload   : {plan['moe_cpu_override'] or 'Full GPU (-ngl ' + str(plan['n_gpu_layers']) + ')'}")
+    print(f"  Context / KV  : {plan['ctx_size']} tokens | KV={plan['kv_cache']} | FA={plan['flash_attn']} | Threads={plan['threads']}")
+    print(f"  DSpark / Vis  : Draft={'ON' if plan['draft_model'] else 'OFF'} | Vision={'ON' if plan['mmproj_model'] else 'OFF'}")
     print(f"  OpenAI API    : {plan['api_base']}")
     if plan["warning"]:
-        print(f"  [UYARI]       : {plan['warning']}")
-    print("  Durdurmak icin Ctrl+C")
+        print(f"  [WARNING]     : {plan['warning']}")
+    print("  Press Ctrl+C to stop")
     print("============================================================\n")
 
     proc = subprocess.Popen(cmd)

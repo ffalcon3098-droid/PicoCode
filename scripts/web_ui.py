@@ -98,19 +98,19 @@ class ServerManager:
             self.stop()
             reg = serve.load_registry()
             if model_id not in reg["models"]:
-                return False, f"Bilinmeyen model: {model_id}"
+                return False, f"Unknown model: {model_id}"
             if flash_attn not in ("auto", "on", "off"):
                 flash_attn = "auto"
             if ctx_size is not None:
                 try:
                     ctx_size = max(2048, min(131072, int(ctx_size)))
                 except (TypeError, ValueError):
-                    return False, "Gecersiz ctx_size degeri."
+                    return False, "Invalid ctx_size value."
             hw = probe_hardware.probe_hardware(REPO_ROOT / "models")
             self.hw_base = hw
             exe = serve.find_llama_server(hw.get("backend", "vulkan"))
             if exe is None:
-                return False, "llama-server.exe bulunamadi! Once .\\setup.cmd calistirin."
+                return False, "llama-server.exe not found! Run .\\setup.cmd first."
             try:
                 cmd, plan = serve.build_server_command(
                     model_id,
@@ -128,7 +128,7 @@ class ServerManager:
                 return False, str(exc)
 
             with self.lock:
-                self.logs = [f"[PicoCode] Baslatiliyor: {plan['label']}", f"[PicoCode] Komut: {' '.join(cmd)}"]
+                self.logs = [f"[PicoCode] Starting: {plan['label']}", f"[PicoCode] Command: {' '.join(cmd)}"]
                 self.state = "starting"
                 self.active_plan = plan
                 self.error_msg = ""
@@ -157,7 +157,7 @@ class ServerManager:
                     if self.proc is proc:
                         if self.state != "stopped":
                             self.state = "error"
-                            self.error_msg = f"llama-server cikis yapti (kod={code})"
+                            self.error_msg = f"llama-server exited (code={code})"
                         self.proc = None
 
             def _health() -> None:
@@ -166,25 +166,25 @@ class ServerManager:
                     if self.proc is proc:
                         if ok:
                             self.state = "ready"
-                            self.logs.append(f"[PicoCode] Sunucu HAZIR -> http://{connect_host}:{self.api_port}/v1")
+                            self.logs.append(f"[PicoCode] Server READY -> http://{connect_host}:{self.api_port}/v1")
                         elif self.state == "starting":
                             self.state = "error"
-                            self.error_msg = "Sunucu saglik kontrolunu gecemedi. Loglara bakin."
+                            self.error_msg = "Server failed health check. Inspect logs."
 
             threading.Thread(target=_watch, daemon=True).start()
             threading.Thread(target=_health, daemon=True).start()
-            return True, "Baslatiliyor..."
+            return True, "Starting..."
 
     def start_download(self, profile: str) -> tuple[bool, str]:
         reg = serve.load_registry()
         if profile not in reg.get("download_profiles", {}):
-            return False, f"Gecersiz indirme profili: {profile}"
+            return False, f"Invalid download profile: {profile}"
         with self._op_lock:
             with self.lock:
                 if self.dl_proc is not None and self.dl_proc.poll() is None:
-                    return False, f"Zaten indiriliyor: {self.dl_profile}"
+                    return False, f"Already downloading: {self.dl_profile}"
                 self.dl_profile = profile
-                self.dl_logs = [f"[PicoCode] Indirme basladi: {profile}"]
+                self.dl_logs = [f"[PicoCode] Download started: {profile}"]
 
             flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             cmd = [sys.executable, "-u", str(SCRIPT_DIR / "download_models.py"), "--install-engine", "auto", "--profile", profile]
@@ -211,11 +211,11 @@ class ServerManager:
                                 self.dl_logs = self.dl_logs[-60:]
                 proc.wait()
                 with self.lock:
-                    self.dl_logs.append(f"[PicoCode] Indirme tamamlandi (kod={proc.returncode})")
+                    self.dl_logs.append(f"[PicoCode] Download finished (code={proc.returncode})")
                     self.dl_proc = None
 
             threading.Thread(target=_read_dl, daemon=True).start()
-            return True, f"Indirme baslatildi: {profile}"
+            return True, f"Download started: {profile}"
 
     def get_status(self) -> dict[str, Any]:
         ded_m, shr_m = probe_hardware.probe_live_vram_mib()
@@ -223,7 +223,7 @@ class ServerManager:
         with self.lock:
             if self.proc is not None and self.proc.poll() is not None and self.state in ("starting", "ready"):
                 self.state = "error"
-                self.error_msg = f"llama-server durdu (kod={self.proc.returncode})"
+                self.error_msg = f"llama-server stopped (code={self.proc.returncode})"
             dl_running = self.dl_proc is not None and self.dl_proc.poll() is None
             return {
                 "state": self.state,
@@ -283,11 +283,11 @@ class ServerManager:
 
 
 HTML_PAGE = r"""<!doctype html>
-<html lang="tr">
+<html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>PicoCode Studio — Yerel Kodlama Yapay Zekasi</title>
+<title>PicoCode Studio — Local Coding AI</title>
 <style>
   :root {
     --bg: #0b0f17; --panel: #121826; --panel2: #182033; --border: #26314a;
@@ -355,11 +355,11 @@ HTML_PAGE = r"""<!doctype html>
 <header>
   <div class="brand">
     <span>PicoCode Studio</span>
-    <span class="pill">v0.6.0</span>
-    <span id="srvBadge" class="pill warn">Kapali</span>
+    <span class="pill">v0.7.0</span>
+    <span id="srvBadge" class="pill warn">Stopped</span>
   </div>
   <div class="metrics">
-    <span id="gpuName">GPU algilaniyor...</span>
+    <span id="gpuName">Detecting GPU...</span>
     <div class="meter">
       <div id="vramLbl">VRAM: --</div>
       <div class="meter-bar"><div id="vramBar" class="meter-fill"></div></div>
@@ -375,89 +375,89 @@ HTML_PAGE = r"""<!doctype html>
 <div class="layout">
   <aside>
     <div class="card">
-      <h3>Sunucu Kontrolu</h3>
-      <label for="modelSel">Kodlama Modeli</label>
+      <h3>Server Control</h3>
+      <label for="modelSel">Coding Model</label>
       <select id="modelSel"></select>
       <div class="row">
         <div style="flex:1">
-          <label for="ctxInp">Baglam (Context)</label>
+          <label for="ctxInp">Context</label>
           <input id="ctxInp" type="number" step="2048" min="2048" max="65536" value="16384" />
         </div>
         <div style="flex:1">
           <label for="faSel">Flash Attn</label>
           <select id="faSel">
             <option value="auto" selected>Auto</option>
-            <option value="on">Acik (on)</option>
-            <option value="off">Kapali (off)</option>
+            <option value="on">On</option>
+            <option value="off">Off</option>
           </select>
         </div>
       </div>
-      <label class="chk"><input id="draftChk" type="checkbox" checked /> DSpark Hizlandirici (Draft)</label>
-      <label class="chk"><input id="visionChk" type="checkbox" checked /> Vision (Ekran Goruntusu Okuma)</label>
+      <label class="chk"><input id="draftChk" type="checkbox" checked /> DSpark Speculative Draft</label>
+      <label class="chk"><input id="visionChk" type="checkbox" checked /> Vision (Screenshot Input)</label>
       <div class="row" style="margin-top:12px;">
-        <button id="startBtn" class="primary" style="flex:1" onclick="startServer()">Modeli Baslat</button>
-        <button id="stopBtn" class="danger" onclick="stopServer()">Durdur</button>
+        <button id="startBtn" class="primary" style="flex:1" onclick="startServer()">Start Model</button>
+        <button id="stopBtn" class="danger" onclick="stopServer()">Stop</button>
       </div>
     </div>
 
     <div class="card">
-      <h3>Kurulu Modeller <button style="padding:2px 7px;font-size:11px" onclick="refreshModels()">Yenile</button></h3>
-      <div id="modelsList">Yukleniyor...</div>
+      <h3>Installed Models <button style="padding:2px 7px;font-size:11px" onclick="refreshModels()">Refresh</button></h3>
+      <div id="modelsList">Loading...</div>
       <div id="dlBox" style="display:none;margin-top:8px;">
-        <div class="pill warn" id="dlStatus">Indiriliyor...</div>
+        <div class="pill warn" id="dlStatus">Downloading...</div>
         <div class="logbox" id="dlLogs" style="margin-top:6px;"></div>
       </div>
     </div>
 
     <div class="card">
-      <h3>Sunucu Loglari</h3>
-      <div id="srvLogs" class="logbox">Sunucu baslatilmadi.</div>
+      <h3>Server Logs</h3>
+      <div id="srvLogs" class="logbox">Server not started.</div>
     </div>
   </aside>
 
   <main>
     <div class="tabs">
-      <button class="tab active" id="tabChatBtn" onclick="switchTab('chat')">Kodlama Sohbeti</button>
-      <button class="tab" id="tabIdeBtn" onclick="switchTab('ide')">VS Code / IDE Baglantisi</button>
-      <button style="margin-left:auto" onclick="clearChat()">Sohbeti Temizle</button>
+      <button class="tab active" id="tabChatBtn" onclick="switchTab('chat')">Coding Chat</button>
+      <button class="tab" id="tabIdeBtn" onclick="switchTab('ide')">VS Code / IDE Connect</button>
+      <button style="margin-left:auto" onclick="clearChat()">Clear Chat</button>
     </div>
 
     <div id="chatPane" style="flex:1;display:flex;flex-direction:column;min-height:0;">
       <div id="chatLog" class="chat-wrap">
         <div class="msg assistant">
-          <div class="msg-meta"><span>PicoCode</span><span>Hazir</span></div>
-          Sol panelden <b>Inkling 2 Mini</b> (veya kurulu bir kodlama modelini) baslatin. Ardindan burada dogrudan kod yazabilir, hata ekran goruntusu yapistirabilir veya <b>VS Code (Continue / Cline / Roo Code)</b> eklentilerini <code>http://127.0.0.1:8080/v1</code> adresine baglayabilirsiniz.
+          <div class="msg-meta"><span>PicoCode</span><span>Ready</span></div>
+          Start <b>Inkling 2 Mini</b> (or any installed coding model) from the left panel. You can chat directly, attach error screenshots, or connect <b>VS Code (Continue / Cline / Roo Code)</b> to <code>http://127.0.0.1:8080/v1</code>.
         </div>
       </div>
 
       <div class="composer">
         <div class="presets">
-          <button onclick="usePreset('Bu kodda olasi buglari, race conditionlari ve performans darboğazlarini bulup duzeltilmis halini ver:\n\n')">Bug Bul</button>
-          <button onclick="usePreset('Asagidaki kodu temiz, tip guvenli ve uretim kalitesinde refactor et:\n\n')">Refactor Et</button>
-          <button onclick="usePreset('Bu fonksiyon icin uc durumlari (edge cases) kapsayan pytest birim testleri yaz:\n\n')">Test Yaz</button>
-          <button onclick="usePreset('Bu hata mesajini adim adim Turkce acikla ve kalici cozumu goster:\n\n')">Hata Coz</button>
+          <button onclick="usePreset('Find bugs, race conditions, and performance bottlenecks in this code and provide the fixed version:\n\n')">Find Bugs</button>
+          <button onclick="usePreset('Refactor the following code to be clean, type-safe, and production-ready:\n\n')">Refactor</button>
+          <button onclick="usePreset('Write unit tests covering edge cases for this function:\n\n')">Write Tests</button>
+          <button onclick="usePreset('Explain this error step by step and show the permanent fix:\n\n')">Fix Error</button>
           <label style="margin:0;cursor:pointer;">
-            <span class="pill" style="display:inline-block;padding:4px 9px;">+ Ekran Goruntusu (Vision)</span>
+            <span class="pill" style="display:inline-block;padding:4px 9px;">+ Attach Screenshot (Vision)</span>
             <input id="imgInput" type="file" accept="image/*" style="display:none" onchange="onImageSelect(event)" />
           </label>
           <span id="imgBadge" style="display:none;align-items:center;gap:6px;">
             <img id="imgThumb" class="img-preview" />
-            <button onclick="clearImage()" style="padding:2px 6px;font-size:11px">Kaldir</button>
+            <button onclick="clearImage()" style="padding:2px 6px;font-size:11px">Remove</button>
           </span>
         </div>
         <div class="composer-row">
-          <textarea id="promptBox" placeholder="Kod sorunuzu yazin (Ctrl+Enter ile gonderin)..." onkeydown="if(event.ctrlKey && event.key==='Enter'){sendChat();}"></textarea>
-          <button id="sendBtn" class="primary" style="height:54px;min-width:104px" onclick="sendChat()">Gonder</button>
+          <textarea id="promptBox" placeholder="Ask a coding question (Ctrl+Enter to send)..." onkeydown="if(event.ctrlKey && event.key==='Enter'){sendChat();}"></textarea>
+          <button id="sendBtn" class="primary" style="height:54px;min-width:104px" onclick="sendChat()">Send</button>
         </div>
       </div>
     </div>
 
     <div id="idePane" class="ide-pane">
-      <h2>VS Code, Cline, Roo Code & OpenCode Entegrasyonu</h2>
-      <p style="color:var(--muted)">PicoCode arkaplanda standart OpenAI uyumlu API (<code>http://127.0.0.1:8080/v1</code>) sunar. Bulut anahtari gerektirmez; API Key alanina <code>picocode</code> yazmaniz yeterlidir.</p>
+      <h2>VS Code, Cline, Roo Code & OpenCode Integration</h2>
+      <p style="color:var(--muted)">PicoCode exposes a standard OpenAI-compatible API at <code>http://127.0.0.1:8080/v1</code>. No cloud keys required; set API Key to <code>picocode</code>.</p>
 
       <div class="code-wrap">
-        <div class="code-hdr"><span>Cline / Roo Code (VS Code Eklentisi)</span><button onclick="copyText('cfgCline')">Kopyala</button></div>
+        <div class="code-hdr"><span>Cline / Roo Code (VS Code Extension)</span><button onclick="copyText('cfgCline')">Copy</button></div>
         <pre id="cfgCline">API Provider : OpenAI Compatible
 Base URL     : http://127.0.0.1:8080/v1
 API Key      : picocode
@@ -465,7 +465,7 @@ Model ID     : inkling2-mini</pre>
       </div>
 
       <div class="code-wrap">
-        <div class="code-hdr"><span>Continue.dev (~/.continue/config.yaml)</span><button onclick="copyText('cfgContinue')">Kopyala</button></div>
+        <div class="code-hdr"><span>Continue.dev (~/.continue/config.yaml)</span><button onclick="copyText('cfgContinue')">Copy</button></div>
         <pre id="cfgContinue">models:
   - name: PicoCode Inkling 2 Mini (Local)
     provider: openai
@@ -475,12 +475,12 @@ Model ID     : inkling2-mini</pre>
       </div>
 
       <div class="code-wrap">
-        <div class="code-hdr"><span>Python OpenAI SDK</span><button onclick="copyText('cfgPy')">Kopyala</button></div>
+        <div class="code-hdr"><span>Python OpenAI SDK</span><button onclick="copyText('cfgPy')">Copy</button></div>
         <pre id="cfgPy">from openai import OpenAI
 client = OpenAI(base_url="http://127.0.0.1:8080/v1", api_key="picocode")
 resp = client.chat.completions.create(
     model="inkling2-mini",
-    messages=[{"role": "user", "content": "FastAPI async health endpoint yaz."}],
+    messages=[{"role": "user", "content": "Write an async FastAPI health endpoint."}],
 )
 print(resp.choices[0].message.content)</pre>
       </div>
@@ -542,7 +542,7 @@ function renderMarkdown(text) {
   let thinkHtml = '';
   const thinkMatch = text.match(/<think>([\s\S]*?)(<\/think>|$)/);
   if (thinkMatch) {
-    thinkHtml = `<details class="think"><summary>Dusunme Sureci (Reasoning)</summary><div style="white-space:pre-wrap;margin-top:6px">${escHtml(thinkMatch[1].trim())}</div></details>`;
+    thinkHtml = `<details class="think"><summary>Reasoning</summary><div style="white-space:pre-wrap;margin-top:6px">${escHtml(thinkMatch[1].trim())}</div></details>`;
     text = text.replace(/<think>[\s\S]*?(<\/think>|$)/, '').trim();
   }
   const parts = text.split(/```(\w*)\n?([\s\S]*?)```/g);
@@ -554,7 +554,7 @@ function renderMarkdown(text) {
       const lang = parts[i + 1] || 'code';
       const code = parts[i + 2] || '';
       const cid = 'cb_' + Math.random().toString(36).slice(2, 9);
-      out += `<div class="code-wrap"><div class="code-hdr"><span>${escHtml(lang)}</span><button onclick="copyText('${cid}')">Kopyala</button></div><pre id="${cid}">${escHtml(code)}</pre></div>`;
+      out += `<div class="code-wrap"><div class="code-hdr"><span>${escHtml(lang)}</span><button onclick="copyText('${cid}')">Copy</button></div><pre id="${cid}">${escHtml(code)}</pre></div>`;
     }
   }
   return out;
@@ -571,13 +571,13 @@ async function refreshModels() {
   for (const m of currentModels) {
     const opt = document.createElement('option');
     opt.value = m.id;
-    opt.textContent = `${m.id} (${m.size_gib} GiB)${m.installed ? '' : ' [Indirilmedi]'}`;
+    opt.textContent = `${m.id} (${m.size_gib} GiB)${m.installed ? '' : ' [Not downloaded]'}`;
     sel.appendChild(opt);
 
     const row = document.createElement('div');
     row.className = 'model-row';
     const badges = [
-      m.installed ? '<span class="pill ok">Hazir</span>' : '<span class="pill warn">Eksik</span>',
+      m.installed ? '<span class="pill ok">Ready</span>' : '<span class="pill warn">Missing</span>',
       m.has_draft ? '<span class="pill">DSpark</span>' : '',
       m.has_vision ? '<span class="pill">Vision</span>' : '',
     ].join(' ');
@@ -586,8 +586,8 @@ async function refreshModels() {
       <div style="color:var(--muted);margin-bottom:5px">${escHtml(m.label)}</div>
       <div class="row" style="justify-content:space-between">
         <span style="color:var(--muted)">${m.size_gib} GiB</span>
-        ${m.installed ? `<button style="padding:3px 8px;font-size:11px" onclick="selectAndStart('${m.id}')">Sec & Baslat</button>`
-                      : `<button style="padding:3px 8px;font-size:11px" onclick="downloadProfile('${m.download_profile}')">Indir</button>`}
+        ${m.installed ? `<button style="padding:3px 8px;font-size:11px" onclick="selectAndStart('${m.id}')">Select & Start</button>`
+                      : `<button style="padding:3px 8px;font-size:11px" onclick="downloadProfile('${m.download_profile}')">Download</button>`}
       </div>`;
     list.appendChild(row);
   }
@@ -641,10 +641,10 @@ async function pollStatus() {
     const st = await res.json();
     serverState = st.state;
     const badge = document.getElementById('srvBadge');
-    if (st.state === 'ready') { badge.className = 'pill ok'; badge.textContent = 'HAZIR · ' + (st.plan?.model_id || ''); }
-    else if (st.state === 'starting') { badge.className = 'pill warn'; badge.textContent = 'Yukleniyor...'; }
-    else if (st.state === 'error') { badge.className = 'pill err'; badge.textContent = 'Hata'; }
-    else { badge.className = 'pill'; badge.textContent = 'Kapali'; }
+    if (st.state === 'ready') { badge.className = 'pill ok'; badge.textContent = 'READY · ' + (st.plan?.model_id || ''); }
+    else if (st.state === 'starting') { badge.className = 'pill warn'; badge.textContent = 'Loading...'; }
+    else if (st.state === 'error') { badge.className = 'pill err'; badge.textContent = 'Error'; }
+    else { badge.className = 'pill'; badge.textContent = 'Stopped'; }
 
     const hw = st.hardware || {};
     document.getElementById('gpuName').textContent = `${hw.gpu_name || 'GPU'} (${(hw.backend||'').toUpperCase()})`;
@@ -670,7 +670,7 @@ async function pollStatus() {
     const dlBox = document.getElementById('dlBox');
     if (dl.running || (dl.logs && dl.logs.length)) {
       dlBox.style.display = 'block';
-      document.getElementById('dlStatus').textContent = dl.running ? `Indiriliyor: ${dl.profile}` : `Son indirme: ${dl.profile}`;
+      document.getElementById('dlStatus').textContent = dl.running ? `Downloading: ${dl.profile}` : `Last download: ${dl.profile}`;
       document.getElementById('dlLogs').textContent = (dl.logs || []).join('\n');
       if (window._lastDlRunning && !dl.running) refreshModels();
       window._lastDlRunning = !!dl.running;
@@ -698,7 +698,7 @@ async function sendChat() {
   const text = box.value.trim();
   if (!text && !attachedImageDataUrl) return;
   if (serverState !== 'ready') {
-    alert('Once sol panelden "Modeli Baslat" tusuna basin ve durumun HAZIR olmasini bekleyin.');
+    alert('Click "Start Model" on the left panel first and wait until status shows READY.');
     return;
   }
   box.value = '';
@@ -708,7 +708,7 @@ async function sendChat() {
   let userPreview = escHtml(text).replace(/\n/g, '<br>');
   if (attachedImageDataUrl) {
     userContent = [
-      {type: 'text', text: text || 'Bu ekran goruntusunu analiz et ve kod cozumunu ver.'},
+      {type: 'text', text: text || 'Analyze this screenshot and provide the code fix.'},
       {type: 'image_url', image_url: {url: attachedImageDataUrl}},
     ];
     userPreview += `<br><img src="${attachedImageDataUrl}" class="img-preview" style="margin-top:6px"/>`;
@@ -718,12 +718,12 @@ async function sendChat() {
 
   const uDiv = document.createElement('div');
   uDiv.className = 'msg user';
-  uDiv.innerHTML = `<div class="msg-meta"><span>Sen</span></div><div>${userPreview}</div>`;
+  uDiv.innerHTML = `<div class="msg-meta"><span>You</span></div><div>${userPreview}</div>`;
   chatLog.appendChild(uDiv);
 
   const aDiv = document.createElement('div');
   aDiv.className = 'msg assistant';
-  aDiv.innerHTML = `<div class="msg-meta"><span>PicoCode</span><span class="stat">Uretiliyor...</span></div><div class="body">...</div>`;
+  aDiv.innerHTML = `<div class="msg-meta"><span>PicoCode</span><span class="stat">Generating...</span></div><div class="body">...</div>`;
   chatLog.appendChild(aDiv);
   chatLog.scrollTop = chatLog.scrollHeight;
 
@@ -750,7 +750,7 @@ async function sendChat() {
     });
     if (!resp.ok) {
       const errJ = await resp.json().catch(() => ({error: resp.statusText}));
-      aDiv.querySelector('.body').textContent = 'Hata: ' + (errJ.error || resp.status);
+      aDiv.querySelector('.body').textContent = 'Error: ' + (errJ.error || resp.status);
       historyMsgs.pop();
       return;
     }
@@ -793,10 +793,10 @@ async function sendChat() {
     }
     paintBody();
     const totalS = ((performance.now() - t0) / 1000).toFixed(1);
-    aDiv.querySelector('.stat').textContent = `${tokCount} token · ${totalS}s`;
+    aDiv.querySelector('.stat').textContent = `${tokCount} tokens · ${totalS}s`;
     historyMsgs.push({role: 'assistant', content: fullText});
   } catch (err) {
-    aDiv.querySelector('.body').textContent = 'Hata: ' + err;
+    aDiv.querySelector('.body').textContent = 'Error: ' + err;
   } finally {
     sendBtn.disabled = false;
   }
@@ -825,18 +825,18 @@ def make_handler(mgr: ServerManager, *, csrf_token: str | None = None) -> type[B
 
         def _check_post_security(self) -> tuple[bool, str]:
             if not self._check_host():
-                return False, "Gecersiz Host basligi."
+                return False, "Invalid Host header."
             ct = (self.headers.get("Content-Type") or "").lower()
             if "application/json" not in ct:
-                return False, "Content-Type application/json olmalidir."
+                return False, "Content-Type must be application/json."
             origin = (self.headers.get("Origin") or "").strip()
             if origin:
                 p = urllib.parse.urlparse(origin)
                 if (p.hostname or "").lower() not in ("127.0.0.1", "localhost", "::1"):
-                    return False, "Dis origin engellendi."
+                    return False, "Cross-origin request blocked."
             tok = (self.headers.get("X-PicoCode-Token") or "").strip()
             if not secrets.compare_digest(tok, session_csrf):
-                return False, "CSRF token gecersiz."
+                return False, "Invalid CSRF token."
             return True, ""
 
         def _send_json(self, data: Any, status: int = 200) -> None:
@@ -878,11 +878,11 @@ def make_handler(mgr: ServerManager, *, csrf_token: str | None = None) -> type[B
             try:
                 length = int(self.headers.get("Content-Length", "0") or "0")
             except ValueError:
-                self._send_json({"error": "Gecersiz Content-Length"}, status=400)
+                self._send_json({"error": "Invalid Content-Length"}, status=400)
                 return
             max_bytes = 16 * 1024 * 1024 if self.path == "/api/chat" else 128 * 1024
             if length < 0 or length > max_bytes:
-                self._send_json({"error": "Istek boyutu siniri asiyor."}, status=413)
+                self._send_json({"error": "Request body exceeds size limit."}, status=413)
                 return
             raw = self.rfile.read(length) if length > 0 else b"{}"
             try:
@@ -962,8 +962,8 @@ def main() -> int:
     url = f"http://{args.host}:{args.port}"
     print(f"============================================================")
     print(f"  PicoCode Web Studio -> {url}")
-    print(f"  OpenAI API Hedefi   -> http://{args.host}:{args.api_port}/v1")
-    print(f"  Kapatmak icin Ctrl+C")
+    print(f"  OpenAI API Target   -> http://{args.host}:{args.api_port}/v1")
+    print(f"  Press Ctrl+C to stop")
     print(f"============================================================")
     if not args.no_browser:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()

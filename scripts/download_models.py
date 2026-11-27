@@ -113,7 +113,7 @@ def _download_with_python_urllib(url: str, dest: pathlib.Path, expected_bytes: i
                 continue
             print(f"\n  [WARN] HTTP {exc.code}: {exc.reason}", file=sys.stderr)
         except Exception as exc:
-            print(f"\n  [WARN] Indirme hatasi (deneme {attempt}/4): {exc}", file=sys.stderr)
+            print(f"\n  [WARN] Download error (attempt {attempt}/4): {exc}", file=sys.stderr)
         time.sleep(min(10, attempt * 2))
     return False
 
@@ -145,10 +145,10 @@ def download_url_resumable(url: str, dest: pathlib.Path, expected_bytes: int = 0
             curl_ok = True
         else:
             # Never delete a multi-GB partial download on transient network drop; hand off to urllib Range resume
-            print(f"  [WARN] curl cikis kodu {p.returncode} (kismi dosya korundu)", file=sys.stderr)
+            print(f"  [WARN] curl exited with code {p.returncode} (partial file kept)", file=sys.stderr)
 
     if not curl_ok:
-        print("  [INFO] Yerlesik Python indiricisine geciliyor (kaldigi yerden devam)...")
+        print("  [INFO] Switching to built-in Python downloader (resuming partial file)...")
         _download_with_python_urllib(url, dest, expected_bytes)
 
     return dest.exists() and (expected_bytes <= 0 or dest.stat().st_size == expected_bytes)
@@ -183,7 +183,7 @@ def install_llama_engine(reg: dict[str, Any], backend: str = "vulkan") -> pathli
     target_dir = ENGINE_DIR / sub
     server_exe = target_dir / "llama-server.exe"
     if server_exe.exists():
-        print(f"  [SKIP] Motor hazir: {server_exe}")
+        print(f"  [SKIP] Engine ready: {server_exe}")
         return server_exe
 
     rels = reg["engine_releases"]
@@ -215,9 +215,9 @@ def install_llama_engine(reg: dict[str, Any], backend: str = "vulkan") -> pathli
             break
 
     if server_exe.exists():
-        print(f"  [OK  ] llama-server.exe kuruldu: {server_exe}")
+        print(f"  [OK  ] Installed llama-server.exe: {server_exe}")
         return server_exe
-    print("HATA: llama-server.exe arsivden cikartilamadi.", file=sys.stderr)
+    print("ERROR: Could not extract llama-server.exe from archive.", file=sys.stderr)
     return None
 
 
@@ -225,10 +225,10 @@ def recommend_profile(hw: dict[str, Any]) -> tuple[str, str]:
     ram = float(hw.get("ram_total_gib", 16.0))
     disk = float(hw.get("disk_free_gib", 20.0))
     if ram >= 24.0 and disk >= 19.0:
-        return "inkling2-mini", f"32 GB RAM ({ram:.1f} GiB) + {hw['vram_total_gib']:.1f} GiB VRAM ile Looped MoE Inkling 2 Mini"
+        return "inkling2-mini", f"Looped MoE Inkling 2 Mini for {ram:.1f} GiB RAM + {hw['vram_total_gib']:.1f} GiB VRAM"
     if ram >= 20.0 and disk >= 17.0:
-        return "inkling2-compact", f"Kompakt 4-bit Inkling 2 Mini (RAM {ram:.1f} GiB, Disk {disk:.1f} GiB)"
-    return "starter-7b", f"Dusuk RAM/Disk icin %100 GPU Qwen2.5-Coder-7B (RAM {ram:.1f} GiB)"
+        return "inkling2-compact", f"Compact 4-bit Inkling 2 Mini (RAM {ram:.1f} GiB, Disk {disk:.1f} GiB)"
+    return "starter-7b", f"100% GPU Qwen2.5-Coder-7B for compact RAM/Disk (RAM {ram:.1f} GiB)"
 
 
 def main() -> int:
@@ -248,7 +248,7 @@ def main() -> int:
     hw = probe_hardware.probe_hardware(REPO_ROOT / "models")
 
     if args.list_profiles:
-        print("=== PicoCode Model Profilleri ===")
+        print("=== PicoCode Model Profiles ===")
         for k, v in profiles.items():
             tot = sum(int(files_map[f]["expected_bytes"]) for f in v["required"])
             print(f"  {k:18s} ({format_gb(tot):>9s})  {v['desc']}")
@@ -265,16 +265,16 @@ def main() -> int:
     prof = args.profile
     if prof is None:
         rec, reason = recommend_profile(hw)
-        print(f"\n[PicoCode] GPU: {hw['gpu_name']} ({hw['backend'].upper()}, {hw['vram_total_gib']:.1f} GiB) | RAM: {hw['ram_total_gib']:.1f} GiB | Bos Disk: {hw['disk_free_gib']:.1f} GiB")
-        print(f"           Oneri: {rec} — {reason}")
+        print(f"\n[PicoCode] GPU: {hw['gpu_name']} ({hw['backend'].upper()}, {hw['vram_total_gib']:.1f} GiB) | RAM: {hw['ram_total_gib']:.1f} GiB | Free Disk: {hw['disk_free_gib']:.1f} GiB")
+        print(f"           Recommended: {rec} — {reason}")
         keys = list(profiles.keys())
         for idx, k in enumerate(keys, 1):
             tot = sum(int(files_map[f]["expected_bytes"]) for f in profiles[k]["required"])
             rem = sum(check_file(files_map[f])[2] for f in profiles[k]["required"])
-            mark = " ★ Onerilen" if k == rec else ""
-            print(f"  [{idx}] {k:18s} ({format_gb(tot)}, kalan {format_gb(rem)}){mark} — {profiles[k]['desc']}")
+            mark = " ★ Recommended" if k == rec else ""
+            print(f"  [{idx}] {k:18s} ({format_gb(tot)}, remaining {format_gb(rem)}){mark} — {profiles[k]['desc']}")
         def_i = str(keys.index(rec) + 1)
-        ch = input(f"Indirilecek paket [{def_i}]: ").strip() or def_i
+        ch = input(f"Select package to download [{def_i}]: ").strip() or def_i
         prof = keys[int(ch) - 1] if ch.isdigit() and 1 <= int(ch) <= len(keys) else rec
 
     req_ids = profiles[prof]["required"]
@@ -290,10 +290,10 @@ def main() -> int:
     needed = sum(check_file(files_map[fid])[2] for fid in req_ids)
     free_b = shutil.disk_usage(REPO_ROOT).free
     if needed > 0 and (free_b - needed) < 1_500_000_000 and not args.force_low_disk:
-        print(f"HATA: Yetersiz bos disk! Gereken: {format_gb(needed)}, Bos: {format_gb(free_b)}", file=sys.stderr)
+        print(f"ERROR: Insufficient free disk space! Required: {format_gb(needed)}, Free: {format_gb(free_b)}", file=sys.stderr)
         return 1
 
-    print(f"[PicoCode] '{prof}' indiriliyor (kalan: {format_gb(needed)}, bos disk: {format_gb(free_b)})...")
+    print(f"[PicoCode] Downloading '{prof}' (remaining: {format_gb(needed)}, free disk: {format_gb(free_b)})...")
     ok_all = True
     for fid in req_ids:
         if not download_file(files_map[fid]):

@@ -76,23 +76,24 @@ except ImportError:
 
 
 SLASH_COMMANDS: list[tuple[str, str]] = [
-    ("/project", "Proje klasörü seç, değiştir veya yeni oluştur (/project StarForge)"),
-    ("/trust", "Güvenilen klasörleri yönet (/trust | /trust add | /trust remove)"),
-    ("/files", "Aktif projedeki dosyaları listele (/files [alt_klasör])"),
-    ("/add", "Dosyayı sohbet bağlamına sabitle (/add dosya.py · Tab)"),
-    ("/drop", "Sabitlenmiş dosyaları bağlamdan çıkar (/drop [dosya.py])"),
-    ("/model", "Kurulu modelleri gör veya canlı değiştir (/model inkling2-mini)"),
-    ("/plan", "Salt-okunur Plan Modu aç / kapat"),
-    ("/diff", "Çalışma dizinindeki Git diff özetini göster"),
-    ("/undo", "Son turdaki tüm dosya değişikliklerini geri al"),
-    ("/status", "Model, proje, güven, bağlam ve Git özeti"),
-    ("/yes", "Kabuk komutları için otomatik onayı aç / kapat"),
-    ("/clear", "Sohbet geçmişini sıfırla ve ekranı temizle"),
-    ("/help", "Komut listesini ve kısayolları göster"),
-    ("/exit", "PicoCode Terminal Ajanından çık"),
+    ("/project", "Pick, switch, or create a workspace folder (/project StarForge)"),
+    ("/trust", "Manage trusted folders (/trust | /trust add | /trust remove)"),
+    ("/files", "Browse files in the active project (/files [subdir])"),
+    ("/add", "Pin a file into persistent chat context (/add file.py · Tab)"),
+    ("/drop", "Unpin files from context (/drop [file.py])"),
+    ("/model", "List installed models or hot-swap live (/model inkling2-mini)"),
+    ("/plan", "Toggle read-only Plan & Review Mode"),
+    ("/diff", "Show working-tree Git diff summary"),
+    ("/undo", "Revert all file edits from the last turn"),
+    ("/status", "Show active model, project, trust, context, and Git status"),
+    ("/yes", "Toggle auto-approval for safe shell commands"),
+    ("/clear", "Reset chat history and clear screen"),
+    ("/help", "Show command list and shortcuts"),
+    ("/exit", "Exit PicoCode Terminal Agent"),
 ]
 
 TOOL_DISPLAY_NAMES: dict[str, tuple[str, str]] = {
+    "project_overview": ("Overview", "#38bdf8"),
     "repo_map": ("RepoMap", "#38bdf8"),
     "list_files": ("List", "#38bdf8"),
     "read_file": ("Read", "#60a5fa"),
@@ -154,7 +155,7 @@ if HAS_PT:
                 for m in self._get_models():
                     mid = str(m.get("id") or "")
                     if partial in mid.lower():
-                        tag = "✓ kurulu" if m.get("installed") else "eksik"
+                        tag = "✓ installed" if m.get("installed") else "missing"
                         yield Completion(
                             mid,
                             start_position=-len(text[7:]),
@@ -170,7 +171,7 @@ if HAS_PT:
                     for p in self._get_projects():
                         pname = str(p.get("name") or "")
                         if partial in pname.lower():
-                            meta = ("✓ güvenli" if p.get("trusted") else "yeni") + (" · git" if p.get("is_git") else "")
+                            meta = ("✓ trusted" if p.get("trusted") else "new") + (" · git" if p.get("is_git") else "")
                             yield Completion(
                                 pname,
                                 start_position=-len(raw_arg),
@@ -186,7 +187,7 @@ if HAS_PT:
                 matches = [f for f in files if ql in f.lower()]
                 matches.sort(key=lambda f: (not f.lower().startswith(ql), len(f)))
                 for f in matches[:18]:
-                    yield Completion(f, start_position=-len(raw_arg), display=f, display_meta="bağlama sabitle")
+                    yield Completion(f, start_position=-len(raw_arg), display=f, display_meta="pin to context")
                 return
             # 4) `/drop <file>` sub-completion
             if low.startswith("/drop "):
@@ -194,7 +195,7 @@ if HAS_PT:
                 ql = raw_arg.strip().lower()
                 for f in self._get_pinned():
                     if ql in f.lower():
-                        yield Completion(f, start_position=-len(raw_arg), display=f, display_meta="bağlamdan çıkar")
+                        yield Completion(f, start_position=-len(raw_arg), display=f, display_meta="unpin file")
                 return
             # 5) Slash commands at start of line
             if text.startswith("/") and " " not in text:
@@ -217,7 +218,7 @@ if HAS_PT:
                             f,
                             start_position=-len(partial),
                             display=f"@{f}",
-                            display_meta="dosya bağlamı",
+                            display_meta="file context",
                         )
 
 
@@ -297,21 +298,21 @@ class TerminalUI:
         meta.add_column(style="bold #64748b", justify="right", no_wrap=True)
         meta.add_column(style="#e2e8f0")
 
-        mode_str = "[bold #f59e0b]◐ PLAN (salt-okunur)[/]" if plan_only else "[bold #22c55e]● AGENT (16 adım)[/]"
+        mode_str = "[bold #f59e0b]◐ PLAN (read-only)[/]" if plan_only else "[bold #22c55e]● AGENT (16 steps)[/]"
         if auto_approve:
             mode_str += "  [bold #38bdf8]⚡ --yes[/]"
-        trust_tag = "[#22c55e]🔒 Güvenli[/]" if trusted else "[#f59e0b]⚠ Salt-Okunur[/]"
-        git_str = f"[#a78bfa]⎇ {git_branch}[/]" if git_branch else "[#64748b]git yok[/]"
+        trust_tag = "[#22c55e]🔒 Trusted[/]" if trusted else "[#f59e0b]⚠ Read-Only[/]"
+        git_str = f"[#a78bfa]⎇ {git_branch}[/]" if git_branch else "[#64748b]no git[/]"
         if git_branch:
-            git_str += f"  [#f59e0b]({git_changes} değişiklik)[/]" if git_changes else "  [#22c55e](temiz)[/]"
+            git_str += f"  [#f59e0b]({git_changes} changed)[/]" if git_changes else "  [#22c55e](clean)[/]"
 
         meta.add_row("Model", f"[bold #38bdf8]{rich_escape(model)}[/]  [#64748b]({ctx_limit // 1024}K ctx)[/]")
-        meta.add_row("Proje", f"[bold #f8fafc]{rich_escape(workspace_name)}[/]  {trust_tag}  [#64748b]{rich_escape(workspace_path)}[/]")
+        meta.add_row("Project", f"[bold #f8fafc]{rich_escape(workspace_name)}[/]  {trust_tag}  [#64748b]{rich_escape(workspace_path)}[/]")
         meta.add_row("Git", git_str)
-        meta.add_row("Mod", mode_str)
+        meta.add_row("Mode", mode_str)
         meta.add_row(
-            "Kısayol",
-            "[#38bdf8]/project[/]  [#38bdf8]/model[/]  [#38bdf8]/files[/]  [#38bdf8]/add[/]  [#38bdf8]/plan[/]  [#38bdf8]/undo[/]  [#64748b]· Tab tamamla[/]",
+            "Commands",
+            "[#38bdf8]/project[/]  [#38bdf8]/model[/]  [#38bdf8]/files[/]  [#38bdf8]/add[/]  [#38bdf8]/plan[/]  [#38bdf8]/undo[/]  [#64748b]· Tab to complete[/]",
         )
 
         grid = Table.grid(expand=True, padding=(0, 2))
@@ -326,7 +327,7 @@ class TerminalUI:
             padding=(0, 1),
             title="[bold #38bdf8]✦ PicoCode Terminal Agent[/]",
             title_align="left",
-            subtitle="[#64748b]Apache-2.0 · 100% Yerel[/]",
+            subtitle="[#64748b]Apache-2.0 · 100% Local[/]",
             subtitle_align="right",
         )
         self.console.print()
@@ -372,7 +373,7 @@ class TerminalUI:
                     f"  <bottom-toolbar.sep>│</bottom-toolbar.sep>  /project · /model · /add"
                 )
 
-            rprompt = HTML("<rprompt>Ctrl+C çıkış</rprompt>")
+            rprompt = HTML("<rprompt>Ctrl+C exit</rprompt>")
             return self._session.prompt(
                 HTML("<prompt>❯ </prompt>"),
                 rprompt=rprompt,
@@ -416,8 +417,8 @@ class TerminalUI:
         tbl.add_column("Desc", style="#cbd5e1")
         for c, d in SLASH_COMMANDS:
             tbl.add_row(c, d)
-        tbl.add_row("@dosya", "Prompt içine doğrudan dosya içeriği ekle (Tab ile seç)")
-        self.console.print(Panel(tbl, title="[bold #38bdf8]Komutlar[/]", border_style="#334155", box=box.ROUNDED))
+        tbl.add_row("@file", "Inline file content directly into your prompt (Tab to pick)")
+        self.console.print(Panel(tbl, title="[bold #38bdf8]Commands[/]", border_style="#334155", box=box.ROUNDED))
 
     def print_models_table(self, models: list[dict[str, Any]], active_model: str) -> None:
         if not self.console:
@@ -427,22 +428,22 @@ class TerminalUI:
             return
         tbl = Table(box=box.ROUNDED, border_style="#334155", padding=(0, 1))
         tbl.add_column("Model ID", style="bold #38bdf8", no_wrap=True)
-        tbl.add_column("Durum", no_wrap=True)
-        tbl.add_column("Bağlam", justify="right", style="#94a3b8", no_wrap=True)
-        tbl.add_column("Özellik", style="#cbd5e1")
+        tbl.add_column("Status", no_wrap=True)
+        tbl.add_column("Context", justify="right", style="#94a3b8", no_wrap=True)
+        tbl.add_column("Profile", style="#cbd5e1")
         for m in models:
             if m["id"] == active_model:
-                st = "[bold #22c55e]● Aktif[/]"
+                st = "[bold #22c55e]● Active[/]"
             elif m["installed"]:
-                st = "[#38bdf8]✓ Kurulu[/]"
+                st = "[#38bdf8]✓ Installed[/]"
             else:
-                st = "[#64748b]✗ Eksik[/]"
+                st = "[#64748b]✗ Missing[/]"
             tbl.add_row(m["id"], st, f"{m['ctx_limit'] // 1024}K", m.get("short") or m.get("label", ""))
         self.console.print(
             Panel(
                 tbl,
-                title="[bold #38bdf8]✦ Yerel Kodlama Modelleri[/]",
-                subtitle="[#64748b]Canlı geçiş: /model inkling2-mini  veya  /model qwen3-coder-30b[/]",
+                title="[bold #38bdf8]✦ Local Coding Models[/]",
+                subtitle="[#64748b]Live switch: /model inkling2-mini  or  /model qwen3-coder-30b[/]",
                 border_style="#334155",
                 box=box.ROUNDED,
             )
@@ -454,22 +455,22 @@ class TerminalUI:
             body = Text()
             body.append(f"{folder_path}\n\n", style="bold #f8fafc")
             body.append(
-                "PicoCode bu klasördeki dosyaları okuyabilir, düzenleyebilir ve onayınızla kabuk komutları çalıştırabilir.\n"
-                "Bu klasördeki dosya ve komutlara güveniyor musunuz?\n\n",
+                "PicoCode can read and edit files in this folder, and run shell commands with your approval.\n"
+                "Do you trust the files and commands in this folder?\n\n",
                 style="#cbd5e1",
             )
             body.append("  [1] ", style="bold #22c55e")
-            body.append("Evet, bu klasöre güven ve hatırla ", style="bold #e2e8f0")
+            body.append("Yes, trust this folder and remember ", style="bold #e2e8f0")
             body.append("(Enter)\n", style="#64748b")
             body.append("  [2] ", style="bold #f59e0b")
-            body.append("Sadece bu oturumda salt-okunur Plan Modunda aç\n", style="#e2e8f0")
+            body.append("Open in read-only Plan Mode for this session\n", style="#e2e8f0")
             body.append("  [3] ", style="bold #ef4444")
-            body.append("Hayır, vazgeç", style="#e2e8f0")
+            body.append("No, cancel", style="#e2e8f0")
             self.console.print()
             self.console.print(
                 Panel(
                     body,
-                    title="[bold #f59e0b]🔒 Klasör Güven Onayı (Trust Folder)[/]",
+                    title="[bold #f59e0b]🔒 Folder Trust Gate[/]",
                     title_align="left",
                     border_style="#f59e0b",
                     box=box.ROUNDED,
@@ -477,9 +478,9 @@ class TerminalUI:
                 )
             )
         else:
-            print(f"\n[TRUST FOLDER] {folder_path}\n  [1] Evet, güven (Enter)\n  [2] Salt-okunur (/plan)\n  [3] Vazgeç")
+            print(f"\n[TRUST FOLDER] {folder_path}\n  [1] Yes, trust (Enter)\n  [2] Read-only (/plan)\n  [3] Cancel")
         try:
-            ans = input("  Seçiminiz [1/2/3]: ").strip().lower()
+            ans = input("  Choice [1/2/3]: ").strip().lower()
         except (EOFError, KeyboardInterrupt):
             return "deny"
         if ans in ("", "1", "y", "yes", "e", "evet"):
@@ -493,24 +494,24 @@ class TerminalUI:
         projects: list[dict[str, Any]],
         current_path: str,
         *,
-        title: str = "📁 Proje Klasörü Seçin",
+        title: str = "📁 Select Project Folder",
     ) -> str | None:
         """Interactive numbered project selector. Returns chosen path, 'new:<name>', or None (cancel/keep)."""
         if self.console:
             tbl = Table(box=box.ROUNDED, border_style="#334155", padding=(0, 1))
             tbl.add_column("#", style="bold #38bdf8", justify="right", no_wrap=True)
-            tbl.add_column("Proje", style="bold #f8fafc", no_wrap=True)
-            tbl.add_column("Durum", no_wrap=True)
-            tbl.add_column("Yol", style="#64748b")
+            tbl.add_column("Project", style="bold #f8fafc", no_wrap=True)
+            tbl.add_column("Status", no_wrap=True)
+            tbl.add_column("Path", style="#64748b")
             for idx, p in enumerate(projects, 1):
                 is_cur = os.path.normcase(p["path"]) == os.path.normcase(current_path)
                 tags = []
                 if is_cur:
-                    tags.append("[bold #22c55e]● Aktif[/]")
+                    tags.append("[bold #22c55e]● Active[/]")
                 elif p.get("trusted"):
-                    tags.append("[#22c55e]🔒 Güvenli[/]")
+                    tags.append("[#22c55e]🔒 Trusted[/]")
                 else:
-                    tags.append("[#f59e0b]○ Yeni[/]")
+                    tags.append("[#f59e0b]○ New[/]")
                 if p.get("is_git"):
                     tags.append("[#a78bfa]⎇ git[/]")
                 tbl.add_row(str(idx), p["name"], " ".join(tags), p["path"])
@@ -519,7 +520,7 @@ class TerminalUI:
                 Panel(
                     tbl,
                     title=f"[bold #38bdf8]{title}[/]",
-                    subtitle="[#64748b]Numara / proje adı / tam yol yazın · yeni klasör için `new <ad>` · Enter = mevcut[/]",
+                    subtitle="[#64748b]Enter number / project name / path · type `new <name>` to create · Enter = current[/]",
                     border_style="#2563eb",
                     box=box.ROUNDED,
                 )
@@ -529,7 +530,7 @@ class TerminalUI:
             for idx, p in enumerate(projects, 1):
                 print(f"  {idx}. {p['name']} ({p['path']})")
         try:
-            raw = input("  Proje seçimi (Enter=mevcut): ").strip()
+            raw = input("  Select project (Enter=current): ").strip()
         except (EOFError, KeyboardInterrupt):
             return None
         if not raw:
@@ -552,20 +553,20 @@ class TerminalUI:
                 print(f"  {rel} ({sz} B){pin}")
             return
         tbl = Table(box=box.ROUNDED, border_style="#334155", padding=(0, 1))
-        tbl.add_column("Dosya", style="#e2e8f0")
-        tbl.add_column("Boyut", justify="right", style="#64748b", no_wrap=True)
-        tbl.add_column("Bağlam", no_wrap=True)
+        tbl.add_column("File", style="#e2e8f0")
+        tbl.add_column("Size", justify="right", style="#64748b", no_wrap=True)
+        tbl.add_column("Context", no_wrap=True)
         for rel, sz in files[:45]:
             sz_str = f"{sz / 1024:.1f} KB" if sz >= 1024 else f"{sz} B"
-            pin = "[bold #38bdf8]📎 Sabit[/]" if rel in pinned else "[#475569]—[/]"
+            pin = "[bold #38bdf8]📎 Pinned[/]" if rel in pinned else "[#475569]—[/]"
             tbl.add_row(rel, sz_str, pin)
-        extra = f" · ilk 45/{len(files)} dosya" if len(files) > 45 else f" · {len(files)} dosya"
+        extra = f" · first 45/{len(files)} files" if len(files) > 45 else f" · {len(files)} files"
         sub_lbl = f" ({subdir})" if subdir else ""
         self.console.print(
             Panel(
                 tbl,
-                title=f"[bold #38bdf8]📂 Proje Dosyaları{sub_lbl}[/]",
-                subtitle=f"[#64748b]Bağlama ekle: /add <dosya> (Tab) · çıkar: /drop{extra}[/]",
+                title=f"[bold #38bdf8]📂 Project Files{sub_lbl}[/]",
+                subtitle=f"[#64748b]Pin to context: /add <file> (Tab) · unpin: /drop{extra}[/]",
                 border_style="#334155",
                 box=box.ROUNDED,
             )
@@ -579,15 +580,15 @@ class TerminalUI:
         tbl.add_column("State", no_wrap=True)
         tbl.add_column("Path", style="#e2e8f0")
         if not folders:
-            tbl.add_row("[#64748b]—[/]", "[#64748b]Henüz güvenilen klasör yok.[/]")
+            tbl.add_row("[#64748b]—[/]", "[#64748b]No trusted folders yet.[/]")
         for f in folders:
-            cur = "[bold #22c55e]● Aktif[/]" if os.path.normcase(f) == os.path.normcase(current_path) else "[#38bdf8]🔒[/]"
+            cur = "[bold #22c55e]● Active[/]" if os.path.normcase(f) == os.path.normcase(current_path) else "[#38bdf8]🔒[/]"
             tbl.add_row(cur, f)
         self.console.print(
             Panel(
                 tbl,
-                title="[bold #22c55e]🔒 Güvenilen Klasörler (~/.picocode_trusted_folders.json)[/]",
-                subtitle="[#64748b]Kaldırmak için: /trust remove  ·  eklemek için: /trust add[/]",
+                title="[bold #22c55e]🔒 Trusted Folders (~/.picocode_trusted_folders.json)[/]",
+                subtitle="[#64748b]Remove: /trust remove  ·  Add: /trust add[/]",
                 border_style="#334155",
                 box=box.ROUNDED,
             )
@@ -649,14 +650,14 @@ class TerminalUI:
             self.console.print(
                 Panel(
                     Text(cmd, style="bold #fde047"),
-                    title="[bold #f59e0b]⚡ Kabuk Komutu Onayı[/]",
+                    title="[bold #f59e0b]⚡ Shell Command Approval[/]",
                     title_align="left",
                     border_style="#f59e0b",
                     box=box.ROUNDED,
                     padding=(0, 1),
                 )
             )
-            prompt_str = "  [e] Çalıştır  ·  [t] Bu oturumda tümüne izin ver  ·  [h / Enter] Hayır (İptal): "
+            prompt_str = "  [y] Run  ·  [a] Always allow this session  ·  [n / Enter] Deny: "
         else:
             prompt_str = f"  Run `{cmd}`? [y/a/N]: "
         reader = input_fn or input
@@ -680,10 +681,10 @@ class TerminalUI:
         if chunks:
             parts.append(f"~{tps:.1f} tok/s")
         if tools:
-            parts.append(f"{tools} araç")
+            parts.append(f"{tools} tool{'s' if tools != 1 else ''}")
         parts.append(f"ctx {k_str}/{ctx_limit // 1000}k ({pct}%)")
         if edits:
-            parts.append(f"{edits} düzenleme (/undo)")
+            parts.append(f"{edits} edit{'s' if edits != 1 else ''} (/undo)")
         line = " · ".join(parts)
         if self.console:
             self.console.print(f"  [#475569]✓ {line}[/]\n")
@@ -695,7 +696,7 @@ class TerminalUI:
         if not self.console:
             return None
         return Live(
-            Spinner("dots", text=Text(" Düşünüyor...", style="#38bdf8"), style="#38bdf8"),
+            Spinner("dots", text=Text(" Thinking...", style="#38bdf8"), style="#38bdf8"),
             console=self.console,
             refresh_per_second=14,
             transient=False,

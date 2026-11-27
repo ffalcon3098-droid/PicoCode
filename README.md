@@ -1,25 +1,25 @@
-# PicoCode v0.6.0 — 30 tok/s Local 30B Coding LLMs & Claude-Code-Style Terminal Agent on 4–6 GB VRAM PCs
+# PicoCode v0.7.0 — Local 30B Coding LLMs & Claude-Code-Style Terminal Agent on 4–6 GB VRAM PCs
 
 > [Türkçe dokümantasyon için README.tr.md](README.tr.md)
 
-**PicoCode** runs frontier sparse Mixture-of-Experts (MoE) and dense local coding models — led by **Qwen3-Coder-30B-A3B (up to `30.2 tok/s` via Adaptive Hybrid GPU MoE + lossless `ngram-mod`)**, **Inkling 2 Mini (26.4B / 3.4B Looped MoE + DSpark + Vision)**, and **Qwen2.5-Coder-7B** — smoothly on ordinary **4–6 GB VRAM + 32 GB RAM** consumer PCs (AMD Vulkan & NVIDIA CUDA), with **zero C++ compilation**, a **Claude-Code-Style 24-bit TrueColor Terminal Coding Agent (`.\agent.cmd`)**, an **OpenAI-compatible API** for VS Code (Cline, Roo Code, Continue, OpenCode) & **PicoStudio IDE**, and a dark **Web Studio**.
+**PicoCode** runs frontier sparse Mixture-of-Experts (MoE) and dense local coding models — led by **Qwen3-Coder-30B-A3B (`97.5 tok/s` pp via `--load-mode none` + `18–30 tok/s` tg via Adaptive Hybrid GPU MoE + lossless `ngram-mod`)**, **Inkling 2 Mini (26.4B / 3.4B Looped MoE + DSpark + Vision)**, and **Qwen2.5-Coder-7B** — smoothly on ordinary **4–6 GB VRAM + 32 GB RAM** consumer PCs (AMD Vulkan & NVIDIA CUDA), with **zero C++ compilation**, an **English-first Claude-Code-Style 24-bit TrueColor Terminal Coding Agent (`.\agent.cmd`)**, an **OpenAI-compatible API** for VS Code (Cline, Roo Code, Continue, OpenCode) & **PicoStudio IDE**, and a hardened dark **Web Studio**.
 
 All bundled code and default models are **100% Apache 2.0**.
 
 ---
 
-## Key Highlights
+## Key Highlights (`v0.7.0`)
 
-- **Claude-Code-Style 24-bit Terminal Coding Agent (`v0.5.0` · `.\agent.cmd` / `.\picocode.cmd agent`):**
-  - **Folder Trust Gate (`~/.picocode_trusted_folders.json`) & Interactive Project Picker (`/project` / `/cd`):** Launch `.\agent.cmd` with zero flags to pick or create a project folder, approve trust (`Trust` / `Read-Only Plan` / `Cancel`), and switch projects mid-session in **0 seconds** while keeping the LLM warm in VRAM.
-  - **File Browser, Context Pinning & Live Model Hot-Swap:** `/files`, `/add <file>` (`Tab`), `/drop`, `@file` autocomplete, and live `/model inkling` ↔ `/model qwen` hot-swapping without losing chat history.
-  - Rich 24-bit TrueColor TUI (`scripts/tui.py` + `scripts/agent_cli.py`): rounded 2-column welcome header with gradient `PICOCODE` logo, animated braille spinner (`⠋`), live syntax-highlighted Markdown streaming, `● Tool(args)` / `⎿` call tree, red/green Diff Cards, and bottom status toolbar (`mode · model · project · git · pinned · ctx%`).
-- **Zero-Compile Windows Setup (`.\setup.cmd`):** Automatically installs official prebuilt `llama.cpp b12807` Win64 **Vulkan** or **CUDA 12.4** binaries and verified GGUF models. **No Visual Studio or C++ Build Tools required.**
-- **Adaptive Hybrid GPU+RAM MoE + Zero-VRAM Lossless `ngram-mod` (`v0.2.0`):**
-  - Reads live free VRAM before startup and places `4–6` MoE expert layers directly onto 6 GB GDDR6 (`--n-cpu-moe N`, `336 GB/s` vs `35 GB/s` DDR4) with a `650 MiB` anti-spill guard, keeping full **`32K` `q8_0` KV cache** inside VRAM.
-  - Enables **`--spec-type ngram-mod`** (0 MB VRAM, 100% lossless speculative decoding), **`--poll 100`**, **`--cache-reuse 256`**, and **`-b 2048 -ub 512 -tb 12`** — hitting **`18.3–18.9 tok/s`** on fresh code and **`30.2 tok/s` (`232/232` acceptance!)** on real code edits/refactors!
-- **Smart Inkling 2 Mini Engine:** Keeps attention, loop layers, `q8_0` KV cache (`16K`), `DSpark`, and `mmproj` Vision inside **~2.55 GiB VRAM** (`23×` faster prompt eval).
-- **Live VRAM Protection:** Automatically caps context & GPU MoE layers if browsers/desktop apps consume heavy VRAM.
+- **Claude-Code-Style 24-bit Terminal Coding Agent (`.\agent.cmd` / `.\picocode.cmd agent`):**
+  - **English-First UI (with multilingual model replies):** Clean English TUI, Web Studio, installer, and CLI output; the agent automatically responds in whatever language you prompt in.
+  - **10 Workspace Tools Built for Real Codebases & Reviews:** `project_overview` (1-shot manifest/language/hotspot summary), multi-language `repo_map` (Python, JS/TS, **Rust `.rs` + `#[tauri::command]`**, **Go `.go`**), `read_file`, `search_code`, `list_files`, `git_status`, `git_diff`, `edit_file` (instant syntax feedback + CRLF preservation), `write_file`, and `run_command` (destructive-command guard).
+  - **100% KV-Cache Preservation & Anti-Empty-Review Loop:** Keeps identical `tools` schema with `tool_choice="none"` on guaranteed final synthesis turns (`f_keep = 1.000`), epoch/hysteresis compaction (`>72%` ctx), per-step parallel tool output budget, and an evidence-first review verification rule.
+  - **Folder Trust Gate (`~/.picocode_trusted_folders.json`), Project Picker (`/project` / `/cd`), Pinning (`/add` / `/drop`) & Live `/model` Hot-Swap:** Switch projects in **0 seconds** while keeping the LLM warm in VRAM, and hot-swap `/model inkling` ↔ `/model qwen` without losing conversation history.
+- **Zero-Compile Windows Setup (`.\setup.cmd`):** Automatically installs official prebuilt `llama.cpp b12807` Win64 **Vulkan** or **CUDA 12.4** binaries, TUI dependencies, and verified GGUF models (resumable + Zip-Slip protected). **No Visual Studio or C++ Build Tools required.**
+- **Empirically Tuned for 6 GB VRAM + 32 GB RAM (`RX 5600 XT` verified):**
+  - **`Qwen3-Coder-30B-A3B`:** Adaptive Hybrid GPU MoE (`--n-cpu-moe 42`, `6` layers on GDDR6), **`--load-mode none`** (`+18.1%` pp: `82.5 → 97.45 tok/s`, `+3.4%` tg: `20.24 tok/s`), **`-b 1024 -ub 256 -t 6 -tb 12`** (`+10.8%` long-context tg without Vulkan scratch spill), zero-VRAM lossless **`--spec-type ngram-mod`**, and **`--cache-reuse 256`**.
+  - **`Inkling 2 Mini`:** **`-b 1024 -ub 512 -t 6 -tb 12 --cpu-moe --no-op-offload --no-reasoning-preserve`** + **`DSpark`** (`q8_0` draft KV, `64–83%` accept) + **Vision `mmproj`**, with crisp intermediate thinking (`reasoning_budget=512`) and deep final synthesis (`768`).
+- **5 ms Native Windows PDH VRAM Telemetry & Hardened Web Studio:** Instant `pdh.dll` Dedicated/Shared VRAM monitoring (replaces slow PowerShell polling) and full Host + Origin + Content-Type + CSRF (`X-PicoCode-Token`) protection on `http://127.0.0.1:7870`.
 
 ---
 
