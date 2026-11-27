@@ -5,6 +5,8 @@
 
 > [For English documentation, see README.md](README.md) · **Platform:** Windows 10/11 (x64) · **GPU Desteği:** AMD Radeon (Vulkan), NVIDIA GeForce GTX/RTX (CUDA 12.4 & Vulkan), Intel Arc (Vulkan)
 
+> **Durum / Bilinen Sınırlar (Beta):** Fiziksel testler **AMD Radeon RX 5600 XT (6 GB VRAM) + 32 GB RAM (Windows 11)** üzerinde doğrulandı. NVIDIA CUDA 12.4 yolu otomatik ayarlanır ancak henüz **topluluk testine açıktır**; şimdilik **yalnızca Windows 10/11 x64** desteklenir. Sorun veya GPU benchmark paylaşımı için lütfen `py scripts/probe_hardware.py` çıktısıyla GitHub Issue açın.
+
 **PicoCode**, **Qwen3-Coder-30B-A3B (`--load-mode none` ile `97.5 tok/s` prompt işleme + Adaptif Hibrit GPU MoE ve kayıpsız `ngram-mod` ile `18–30 tok/s` üretim)**, **Inkling 2 Mini (26.4B / 3.4B Looped MoE + DSpark + Vision)** ve **Qwen2.5-Coder-7B** gibi güncel açık kaynaklı kodlama modellerini sıradan **4–6 GB VRAM** bilgisayarlarda **sıfır C++ derlemesi**, **İngilizce ana arayüzlü 24-bit TrueColor Terminal Kodlama Ajanı (`.\agent.cmd`)**, **VS Code uyumlu OpenAI API** ve güvenlik sertleştirmeli **Web Studio** ile çalıştırır.
 
 Tüm proje kodu ve varsayılan modeller **%100 Apache 2.0** lisanslıdır.

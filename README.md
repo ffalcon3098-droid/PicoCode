@@ -5,6 +5,8 @@
 
 > [Türkçe dokümantasyon için README.tr.md](README.tr.md) · **Platform:** Windows 10/11 (x64) · **GPUs:** AMD Radeon (Vulkan), NVIDIA GeForce GTX/RTX (CUDA 12.4 & Vulkan), Intel Arc (Vulkan)
 
+> **Status / Known Limitations (Beta):** Physically verified on **AMD Radeon RX 5600 XT (6 GB VRAM) + 32 GB RAM (Windows 11)**. NVIDIA CUDA 12.4 is auto-configured (`llama.cpp` official prebuilt binaries), but **community-tested only**; currently **Windows 10/11 x64 only**. If you hit an issue or want to share GPU benchmarks, please open a GitHub Issue with the output of `py scripts/probe_hardware.py`.
+
 **PicoCode** brings frontier 26B–30B Mixture-of-Experts (MoE) and fast 7B local coding models — **Qwen3-Coder-30B-A3B (`97.5 tok/s` pp via `--load-mode none` + `18–30 tok/s` tg via Adaptive Hybrid GPU MoE + lossless `ngram-mod`)**, **Inkling 2 Mini (26.4B / 3.4B Looped MoE + DSpark + Vision)**, and **Qwen2.5-Coder-7B** — to ordinary **4–6 GB VRAM** consumer PCs with **zero C++ compilation**, an **English-first Claude-Code-Style 24-bit TrueColor Terminal Coding Agent (`.\agent.cmd`)**, an **OpenAI-compatible API** for VS Code (Cline, Roo Code, Continue, OpenCode) & **PicoStudio IDE**, and a hardened dark **Web Studio**.
 
 All bundled code and default models are **100% Apache 2.0**.
