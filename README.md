@@ -1,4 +1,4 @@
-# PicoCode v0.4.0 — 30 tok/s Local 30B Coding LLMs & Claude-Code-Style Terminal Agent on 4–6 GB VRAM PCs
+# PicoCode v0.5.0 — 30 tok/s Local 30B Coding LLMs & Claude-Code-Style Terminal Agent on 4–6 GB VRAM PCs
 
 > [Türkçe dokümantasyon için README.tr.md](README.tr.md)
 
@@ -10,10 +10,10 @@ All bundled code and default models are **100% Apache 2.0**.
 
 ## Key Highlights
 
-- **Claude-Code-Style 24-bit Terminal Coding Agent (`v0.4.0` · `.\agent.cmd` / `.\picocode.cmd agent`):**
-  - Rich 24-bit TrueColor TUI (`scripts/tui.py` + `scripts/agent_cli.py`): rounded 2-column welcome header with gradient `PICOCODE` logo, animated braille spinner (`⠋`), live syntax-highlighted Markdown streaming, `● Tool(args)` / `⎿` call tree, and red/green Diff Cards.
-  - Interactive `❯` prompt with live `/` slash-command & `@file` dropdown autocomplete, persistent history (`↑`/`↓`), bottom status bar (`mode · model · git branch · ctx%`), and `Ctrl+C` turn cancel.
-  - 16-step autonomous loop with 9 safe tools (`repo_map`, `list_files`, `read_file`, `search_code`, `git_status`, `git_diff`, `edit_file`, `write_file`, `run_command`), instant Python/JSON syntax checks, `[e] Run / [h] Always / [Enter] Deny` shell approval card, per-turn `/undo`, and automatic `llama-server` startup.
+- **Claude-Code-Style 24-bit Terminal Coding Agent (`v0.5.0` · `.\agent.cmd` / `.\picocode.cmd agent`):**
+  - **Folder Trust Gate (`~/.picocode_trusted_folders.json`) & Interactive Project Picker (`/project` / `/cd`):** Launch `.\agent.cmd` with zero flags to pick or create a project folder, approve trust (`Trust` / `Read-Only Plan` / `Cancel`), and switch projects mid-session in **0 seconds** while keeping the LLM warm in VRAM.
+  - **File Browser, Context Pinning & Live Model Hot-Swap:** `/files`, `/add <file>` (`Tab`), `/drop`, `@file` autocomplete, and live `/model inkling` ↔ `/model qwen` hot-swapping without losing chat history.
+  - Rich 24-bit TrueColor TUI (`scripts/tui.py` + `scripts/agent_cli.py`): rounded 2-column welcome header with gradient `PICOCODE` logo, animated braille spinner (`⠋`), live syntax-highlighted Markdown streaming, `● Tool(args)` / `⎿` call tree, red/green Diff Cards, and bottom status toolbar (`mode · model · project · git · pinned · ctx%`).
 - **Zero-Compile Windows Setup (`.\setup.cmd`):** Automatically installs official prebuilt `llama.cpp b12807` Win64 **Vulkan** or **CUDA 12.4** binaries and verified GGUF models. **No Visual Studio or C++ Build Tools required.**
 - **Adaptive Hybrid GPU+RAM MoE + Zero-VRAM Lossless `ngram-mod` (`v0.2.0`):**
   - Reads live free VRAM before startup and places `4–6` MoE expert layers directly onto 6 GB GDDR6 (`--n-cpu-moe N`, `336 GB/s` vs `35 GB/s` DDR4) with a `650 MiB` anti-spill guard, keeping full **`32K` `q8_0` KV cache** inside VRAM.

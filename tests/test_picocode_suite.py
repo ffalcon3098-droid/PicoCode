@@ -304,6 +304,43 @@ class TestPicoCodeSuite(unittest.TestCase):
                 srv.shutdown()
                 srv.server_close()
 
+    def test_10_v050_trust_store_project_discovery_and_pinned_files(self) -> None:
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            root = pathlib.Path(td)
+            p1 = root / "ProjAlpha"
+            p2 = root / "ProjBeta"
+            p1.mkdir(); p2.mkdir()
+            (p1 / ".git").mkdir()
+            (p1 / "main.py").write_text("SECRET_VAL = 123\n", encoding="utf-8")
+
+            # 1) TrustStore persistence (trust / is_trusted / untrust)
+            ts = agent_cli.TrustStore(root / "trust.json")
+            self.assertFalse(ts.is_trusted(p1))
+            ts.trust(p1)
+            self.assertTrue(ts.is_trusted(p1))
+            self.assertFalse(ts.is_trusted(p2))
+            self.assertEqual(len(ts.list_trusted()), 1)
+            self.assertTrue(ts.untrust(p1))
+            self.assertFalse(ts.is_trusted(p1))
+
+            # 2) Project discovery + resolution
+            ts.trust(p1)
+            projs = agent_cli.discover_projects(p1, ts)
+            by_name = {p["name"]: p for p in projs}
+            self.assertIn("ProjAlpha", by_name)
+            self.assertIn("ProjBeta", by_name)
+            self.assertTrue(by_name["ProjAlpha"]["trusted"])
+            self.assertTrue(by_name["ProjAlpha"]["is_git"])
+            self.assertFalse(by_name["ProjBeta"]["trusted"])
+            self.assertEqual(agent_cli._resolve_project_target("ProjBeta", p1, projs), p2.resolve())
+
+            # 3) Pinned files injected into system prompt
+            ws = agent_cli.AgentWorkspace(p1)
+            sys_p = agent_cli._build_system_prompt(ws, plan_only=False, pinned_files=["main.py"])
+            self.assertIn("Pinned file `main.py`", sys_p)
+            self.assertIn("SECRET_VAL = 123", sys_p)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -47,7 +47,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 from tui import TerminalUI, init_windows_console  # noqa: E402
 
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 
 IGNORE_DIRS = {
     ".git", "__pycache__", "node_modules", ".venv", "venv",
@@ -794,7 +794,7 @@ def run_agent_turn(
     }
 
 
-def _build_system_prompt(ws: AgentWorkspace, plan_only: bool) -> str:
+def _build_system_prompt(ws: AgentWorkspace, plan_only: bool, pinned_files: list[str] | None = None) -> str:
     root_entries = []
     try:
         for e in sorted(ws.root.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))[:25]:
@@ -809,6 +809,19 @@ def _build_system_prompt(ws: AgentWorkspace, plan_only: bool) -> str:
         if p.is_file():
             rules = f"\nProject rules ({rf}):\n{p.read_text(encoding='utf-8', errors='replace')[:1000]}\n"
             break
+    pinned_block = ""
+    if pinned_files:
+        chunks = []
+        for rel in pinned_files[:4]:
+            try:
+                fp = ws.safe_path(rel)
+                if fp.is_file():
+                    txt = fp.read_text(encoding="utf-8", errors="replace")[:2600]
+                    chunks.append(f"\nPinned file `{rel}`:\n```\n{txt}\n```")
+            except Exception:
+                continue
+        if chunks:
+            pinned_block = "\n" + "\n".join(chunks) + "\n"
     greeting_rule = (
         " For simple greetings (e.g. 'hi', 'hello', 'merhaba', 'selam') or general chat that does not ask to inspect/edit code, "
         "reply briefly in 1-2 sentences WITHOUT calling any tools."
@@ -817,27 +830,119 @@ def _build_system_prompt(ws: AgentWorkspace, plan_only: bool) -> str:
         return (
             f"You are PicoCode Terminal Planning Agent. Workspace: `{ws.root.name}` (root: {', '.join(root_entries)}). "
             "READ-ONLY PLAN MODE: do not modify files. Use `repo_map`, `read_file`, `search_code`, `git_status`, `git_diff` "
-            "when needed and produce a concise numbered plan in the user's language." + greeting_rule + rules
+            "when needed and produce a concise numbered plan in the user's language." + greeting_rule + rules + pinned_block
         )
     return (
         f"You are PicoCode Terminal Coding Agent. Workspace: `{ws.root.name}` (root: {', '.join(root_entries)}). "
         "When asked about the codebase or asked to make changes, use `repo_map` or `search_code` to inspect quickly, "
         "`edit_file` for targeted changes, `write_file` for new files, and `run_command` to run tests. "
-        "Fix any `[SYNTAX ERROR]` immediately. Be concise; reply in the user's language." + greeting_rule + rules
+        "Fix any `[SYNTAX ERROR]` immediately. Be concise; reply in the user's language." + greeting_rule + rules + pinned_block
     )
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=f"PicoCode v{VERSION} — Claude-Code-Style Local Terminal Coding Agent CLI")
     p.add_argument("prompt", nargs="?", default=None, help="Optional one-shot task prompt (omit for interactive REPL).")
-    p.add_argument("--dir", "-d", default=".", help="Target workspace directory (default: current directory).")
+    p.add_argument("--dir", "-d", default=None, help="Target workspace directory (omit to pick interactively).")
     p.add_argument("--model", "-m", default="qwen3-coder-30b", help="Model ID (default: qwen3-coder-30b).")
     p.add_argument("--url", default="http://127.0.0.1:8080/v1", help="OpenAI-compatible server base URL.")
     p.add_argument("--plan", action="store_true", help="Start in read-only planning mode.")
     p.add_argument("--yes", "-y", action="store_true", help="Auto-approve safe shell commands.")
+    p.add_argument("--trust", action="store_true", help="Trust target workspace folder without interactive prompt.")
     p.add_argument("--max-steps", type=int, default=16, help="Maximum tool-calling steps per turn (default: 16).")
     p.add_argument("--no-auto-start", action="store_true", help="Do not auto-start local llama-server if unreachable.")
     return p
+
+
+class TrustStore:
+    """Persists trusted workspace folders in `~/.picocode_trusted_folders.json`."""
+
+    def __init__(self, store_path: pathlib.Path | None = None) -> None:
+        self.path = store_path or (pathlib.Path.home() / ".picocode_trusted_folders.json")
+
+    @staticmethod
+    def _norm(folder: str | pathlib.Path) -> str:
+        return os.path.normcase(str(pathlib.Path(folder).resolve()))
+
+    def _load(self) -> list[str]:
+        if not self.path.is_file():
+            return []
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                return [str(x) for x in data if x]
+        except Exception:
+            pass
+        return []
+
+    def _save(self, items: list[str]) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps(items, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    def list_trusted(self) -> list[str]:
+        return sorted(self._load(), key=lambda s: s.lower())
+
+    def is_trusted(self, folder: str | pathlib.Path) -> bool:
+        target = self._norm(folder)
+        return any(self._norm(x) == target for x in self._load())
+
+    def trust(self, folder: str | pathlib.Path) -> str:
+        resolved = str(pathlib.Path(folder).resolve())
+        items = self._load()
+        if not self.is_trusted(resolved):
+            items.append(resolved)
+            self._save(items)
+        return resolved
+
+    def untrust(self, folder: str | pathlib.Path) -> bool:
+        target = self._norm(folder)
+        items = self._load()
+        kept = [x for x in items if self._norm(x) != target]
+        if len(kept) == len(items):
+            return False
+        self._save(kept)
+        return True
+
+
+def discover_projects(base_dir: pathlib.Path, trust_store: TrustStore) -> list[dict[str, Any]]:
+    """List sibling project folders alongside current/PicoCode projects root plus trusted folders."""
+    candidates: list[pathlib.Path] = []
+    seen: set[str] = set()
+
+    def _add(p: pathlib.Path) -> None:
+        try:
+            rp = p.resolve()
+            if not rp.is_dir():
+                return
+            key = os.path.normcase(str(rp))
+            if key in seen:
+                return
+            seen.add(key)
+            candidates.append(rp)
+        except OSError:
+            pass
+
+    for parent in (base_dir.parent, REPO_ROOT.parent):
+        if parent.is_dir():
+            try:
+                for d in sorted(parent.iterdir(), key=lambda x: x.name.lower()):
+                    if d.is_dir() and not d.name.startswith("."):
+                        _add(d)
+            except OSError:
+                pass
+    for tf in trust_store.list_trusted():
+        _add(pathlib.Path(tf))
+    _add(base_dir)
+
+    out: list[dict[str, Any]] = []
+    for p in candidates[:30]:
+        out.append({
+            "name": p.name,
+            "path": str(p),
+            "trusted": trust_store.is_trusted(p),
+            "is_git": (p / ".git").exists(),
+        })
+    return out
 
 
 _MODEL_ALIASES: dict[str, str] = {
@@ -963,14 +1068,80 @@ def _auto_start_server(ui: TerminalUI, base_url: str, model: str) -> subprocess.
     return None
 
 
+def _resolve_project_target(raw: str, current_root: pathlib.Path, projects: list[dict[str, Any]]) -> pathlib.Path:
+    """Resolve a user project choice ('new:foo', project name, relative or absolute path)."""
+    clean = (raw or "").strip().strip('"').strip("'")
+    if clean.startswith("new:"):
+        name = clean[4:].strip()
+        if not name or ".." in pathlib.Path(name).parts:
+            raise ValueError("Gecersiz yeni proje adi.")
+        base = REPO_ROOT.parent if REPO_ROOT.parent.is_dir() else current_root.parent
+        target = (base / name).resolve()
+        target.mkdir(parents=True, exist_ok=True)
+        return target
+    for p in projects:
+        if p["name"].lower() == clean.lower():
+            return pathlib.Path(p["path"]).resolve()
+    cand = pathlib.Path(clean)
+    if not cand.is_absolute():
+        sib = (current_root.parent / cand).resolve()
+        if sib.is_dir():
+            return sib
+        cand = (current_root / cand).resolve()
+    if not cand.is_dir():
+        raise FileNotFoundError(f"Klasor bulunamadi: {clean}")
+    return cand
+
+
 def main(argv: list[str] | None = None) -> int:
     init_windows_console()
     args = build_parser().parse_args(argv)
-    ws = AgentWorkspace(args.dir)
+    trust_store = TrustStore()
+    is_interactive = (args.prompt is None) and sys.stdin.isatty()
+
+    # Determine initial workspace — if launched interactively without `--dir` from PicoCode folder, show Project Picker!
+    initial_dir = pathlib.Path(args.dir).resolve() if args.dir else pathlib.Path.cwd().resolve()
+    pinned_files: list[str] = []
+    ws_holder: dict[str, AgentWorkspace] = {"ws": AgentWorkspace(initial_dir)}
+
     ui = TerminalUI(
-        get_files_fn=lambda: [rel for rel, _ in ws.walk_files(max_depth=4, max_items=300)],
+        get_files_fn=lambda: [rel for rel, _ in ws_holder["ws"].walk_files(max_depth=4, max_items=300)],
         get_models_fn=list_available_models,
+        get_projects_fn=lambda: discover_projects(ws_holder["ws"].root, trust_store),
+        get_pinned_fn=lambda: list(pinned_files),
     )
+
+    if is_interactive and args.dir is None:
+        projs = discover_projects(initial_dir, trust_store)
+        if len(projs) > 1:
+            choice = ui.pick_project_interactive(projs, str(initial_dir), title="📁 Hangi Proje Klasöründe Çalışalım?")
+            if choice:
+                try:
+                    chosen_dir = _resolve_project_target(choice, initial_dir, projs)
+                    ws_holder["ws"] = AgentWorkspace(chosen_dir)
+                except Exception as exc:
+                    ui.print_error(str(exc))
+                    return 1
+
+    ws = ws_holder["ws"]
+    plan_only = bool(args.plan)
+    auto_approve = bool(args.yes)
+
+    # Folder Trust Gate (Claude Code style)
+    if args.trust:
+        trust_store.trust(ws.root)
+    elif is_interactive and not trust_store.is_trusted(ws.root):
+        decision = ui.prompt_trust_folder(str(ws.root))
+        if decision == "trust":
+            trust_store.trust(ws.root)
+            ui.print_ok(f"Güvenilen klasör kaydedildi: {ws.root.name}")
+        elif decision == "plan":
+            plan_only = True
+            ui.print_warn("Klasör salt-okunur Plan Modunda açıldı (dosyalar değiştirilmeyecek).")
+        else:
+            ui.print_info("İşlem iptal edildi.")
+            return 0
+
     spawned_proc: subprocess.Popen[str] | None = None
     active_model = resolve_model_alias(args.model)
     ctx_limit = resolve_model_ctx_limit(active_model)
@@ -990,9 +1161,22 @@ def main(argv: list[str] | None = None) -> int:
         ui.print_error(f"PicoCode sunucusuna bağlanılamadı ({args.url}). Önce `picocode.cmd --model {active_model}` ile başlatın.")
         return 1
 
-    plan_only = bool(args.plan)
-    auto_approve = bool(args.yes)
-    conv: list[dict[str, Any]] = [{"role": "system", "content": _build_system_prompt(ws, plan_only)}]
+    conv: list[dict[str, Any]] = [{"role": "system", "content": _build_system_prompt(ws, plan_only, pinned_files)}]
+
+    def _show_welcome() -> None:
+        gb, gc = get_git_summary(ws)
+        ui.print_welcome(
+            version=VERSION,
+            model=active_model,
+            workspace_name=ws.root.name,
+            workspace_path=str(ws.root),
+            git_branch=gb,
+            git_changes=gc,
+            plan_only=plan_only,
+            auto_approve=auto_approve,
+            trusted=trust_store.is_trusted(ws.root),
+            ctx_limit=ctx_limit,
+        )
 
     try:
         if args.prompt:
@@ -1000,32 +1184,24 @@ def main(argv: list[str] | None = None) -> int:
             conv.append({"role": "user", "content": args.prompt + at_ctx})
             run_agent_turn(
                 args.url, active_model, ws, conv,
-                plan_only=plan_only, auto_approve=auto_approve, max_steps=args.max_steps, ui=ui,
+                plan_only=plan_only, auto_approve=auto_approve, max_steps=args.max_steps, ctx_limit=ctx_limit, ui=ui,
             )
             return 0
 
-        git_branch, git_changes = get_git_summary(ws)
-        ui.print_welcome(
-            version=VERSION,
-            model=active_model,
-            workspace_name=ws.root.name,
-            workspace_path=str(ws.root),
-            git_branch=git_branch,
-            git_changes=git_changes,
-            plan_only=plan_only,
-            auto_approve=auto_approve,
-        )
+        _show_welcome()
 
         while True:
             git_branch, git_changes = get_git_summary(ws)
             try:
                 user_in = ui.read_prompt(
                     model=active_model,
+                    workspace_name=ws.root.name,
                     git_branch=git_branch,
                     ctx_tokens=estimate_tokens(conv),
                     ctx_limit=ctx_limit,
                     plan_only=plan_only,
                     auto_approve=auto_approve,
+                    pinned_count=len(pinned_files),
                 )
             except (EOFError, KeyboardInterrupt):
                 ui.print_info("Görüşmek üzere 👋")
@@ -1037,6 +1213,93 @@ def main(argv: list[str] | None = None) -> int:
                 break
             if user_in == "/help":
                 ui.print_help()
+                continue
+            if user_in in ("/project", "/cd") or user_in.startswith("/project ") or user_in.startswith("/cd "):
+                projs = discover_projects(ws.root, trust_store)
+                raw_arg = user_in.split(" ", 1)[1].strip() if " " in user_in else ""
+                if not raw_arg:
+                    choice = ui.pick_project_interactive(projs, str(ws.root))
+                    if not choice:
+                        continue
+                    raw_arg = choice
+                elif raw_arg.lower().startswith("new "):
+                    raw_arg = "new:" + raw_arg[4:].strip()
+                try:
+                    new_dir = _resolve_project_target(raw_arg, ws.root, projs)
+                except Exception as exc:
+                    ui.print_error(str(exc))
+                    continue
+                if not trust_store.is_trusted(new_dir):
+                    dec = ui.prompt_trust_folder(str(new_dir))
+                    if dec == "trust":
+                        trust_store.trust(new_dir)
+                    elif dec == "plan":
+                        plan_only = True
+                    else:
+                        ui.print_warn("Proje değişikliği iptal edildi.")
+                        continue
+                ws = AgentWorkspace(new_dir)
+                ws_holder["ws"] = ws
+                pinned_files.clear()
+                conv = [{"role": "system", "content": _build_system_prompt(ws, plan_only, pinned_files)}]
+                ui.print_ok(f"Proje değiştirildi → {ws.root.name} ({ws.root}) [model VRAM'de sıcak kaldı · 0s]")
+                _show_welcome()
+                continue
+            if user_in == "/trust" or user_in.startswith("/trust "):
+                sub = user_in[6:].strip().lower()
+                if sub == "add":
+                    trust_store.trust(ws.root)
+                    ui.print_ok(f"Güvenilen klasörlere eklendi: {ws.root}")
+                elif sub in ("remove", "rm", "revoke"):
+                    if trust_store.untrust(ws.root):
+                        plan_only = True
+                        conv[0] = {"role": "system", "content": _build_system_prompt(ws, plan_only, pinned_files)}
+                        ui.print_warn(f"Güven kaldırıldı ve Plan Moduna geçildi: {ws.root}")
+                    else:
+                        ui.print_info("Bu klasör zaten güvenilenler listesinde değil.")
+                else:
+                    ui.print_trusted_table(trust_store.list_trusted(), str(ws.root))
+                continue
+            if user_in == "/files" or user_in.startswith("/files "):
+                sub = user_in[6:].strip().replace("\\", "/").strip("/")
+                all_f = ws.walk_files(max_depth=4, max_items=300)
+                if sub:
+                    all_f = [(r, s) for r, s in all_f if r == sub or r.startswith(sub + "/")]
+                ui.print_files_table(all_f, pinned_files, subdir=sub)
+                continue
+            if user_in == "/add" or user_in.startswith("/add "):
+                rel = user_in[4:].strip()
+                if not rel:
+                    if pinned_files:
+                        ui.print_ok("Bağlama sabitlenmiş dosyalar: " + ", ".join(pinned_files))
+                    else:
+                        ui.print_info("Sabitlenmiş dosya yok. Eklemek için `/add dosya.py` (Tab ile seçin).")
+                    continue
+                try:
+                    p = ws.safe_path(rel)
+                    if not p.is_file():
+                        ui.print_error(f"Dosya bulunamadı: {rel}")
+                        continue
+                    rel_norm = p.relative_to(ws.root).as_posix()
+                    if rel_norm not in pinned_files:
+                        pinned_files.append(rel_norm)
+                    conv[0] = {"role": "system", "content": _build_system_prompt(ws, plan_only, pinned_files)}
+                    ui.print_ok(f"Bağlama sabitlendi: 📎 {rel_norm} (toplam {len(pinned_files)} dosya)")
+                except Exception as exc:
+                    ui.print_error(str(exc))
+                continue
+            if user_in == "/drop" or user_in.startswith("/drop "):
+                rel = user_in[5:].strip()
+                if not rel:
+                    pinned_files.clear()
+                    conv[0] = {"role": "system", "content": _build_system_prompt(ws, plan_only, pinned_files)}
+                    ui.print_ok("Tüm sabitlenmiş dosyalar bağlamdan çıkarıldı.")
+                elif rel in pinned_files:
+                    pinned_files.remove(rel)
+                    conv[0] = {"role": "system", "content": _build_system_prompt(ws, plan_only, pinned_files)}
+                    ui.print_ok(f"Bağlamdan çıkarıldı: {rel}")
+                else:
+                    ui.print_warn(f"Sabitli dosya bulunamadı: {rel}")
                 continue
             if user_in == "/model" or user_in.startswith("/model "):
                 models = list_available_models()
@@ -1067,22 +1330,19 @@ def main(argv: list[str] | None = None) -> int:
                 ui.print_ok(f"Model değiştirildi → {active_model} ({time.perf_counter() - t0:.1f}s · sohbet geçmişi korundu)")
                 continue
             if user_in == "/clear":
-                conv = [{"role": "system", "content": _build_system_prompt(ws, plan_only)}]
+                conv = [{"role": "system", "content": _build_system_prompt(ws, plan_only, pinned_files)}]
                 ui.clear()
-                ui.print_welcome(
-                    version=VERSION,
-                    model=active_model,
-                    workspace_name=ws.root.name,
-                    workspace_path=str(ws.root),
-                    git_branch=git_branch,
-                    git_changes=git_changes,
-                    plan_only=plan_only,
-                    auto_approve=auto_approve,
-                )
+                _show_welcome()
                 continue
             if user_in == "/plan":
+                if plan_only and not trust_store.is_trusted(ws.root):
+                    dec = ui.prompt_trust_folder(str(ws.root))
+                    if dec != "trust":
+                        ui.print_warn("Güven onayı verilmedi; salt-okunur Plan Modunda kalınıyor.")
+                        continue
+                    trust_store.trust(ws.root)
                 plan_only = not plan_only
-                conv[0] = {"role": "system", "content": _build_system_prompt(ws, plan_only)}
+                conv[0] = {"role": "system", "content": _build_system_prompt(ws, plan_only, pinned_files)}
                 ui.print_ok(f"Plan Modu: {'AÇIK (salt-okunur)' if plan_only else 'KAPALI (tam ajan)'}")
                 continue
             if user_in == "/yes":
@@ -1096,9 +1356,11 @@ def main(argv: list[str] | None = None) -> int:
             if user_in == "/status":
                 toks = estimate_tokens(conv)
                 pct = min(100, int(round((toks / max(1, ctx_limit)) * 100)))
+                trust_lbl = "Güvenli" if trust_store.is_trusted(ws.root) else "Salt-Okunur"
+                pin_lbl = f" · Sabit: {len(pinned_files)} dosya" if pinned_files else ""
                 ui.print_ok(
-                    f"Model: {active_model} · Proje: {ws.root.name} · Git: {git_branch or 'yok'} ({git_changes} değişiklik) · "
-                    f"Bağlam: ~{toks}/{ctx_limit} tok ({pct}%) · Mod: {'PLAN' if plan_only else 'AGENT'}"
+                    f"Model: {active_model} · Proje: {ws.root.name} ({trust_lbl}) · Git: {git_branch or 'yok'} ({git_changes}) · "
+                    f"Bağlam: ~{toks}/{ctx_limit} tok ({pct}%) · Mod: {'PLAN' if plan_only else 'AGENT'}{pin_lbl}"
                 )
                 continue
             if user_in == "/undo":

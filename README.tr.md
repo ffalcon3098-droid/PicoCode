@@ -1,4 +1,4 @@
-# PicoCode v0.4.0 — 4–6 GB VRAM Bilgisayarlarda 30 tok/s Yerel 30B Kodlama Yapay Zekası & Claude Code Tarzı Terminal Ajanı
+# PicoCode v0.5.0 — 4–6 GB VRAM Bilgisayarlarda 30 tok/s Yerel 30B Kodlama Yapay Zekası & Claude Code Tarzı Terminal Ajanı
 
 > [For English documentation, see README.md](README.md)
 
@@ -10,10 +10,10 @@ Tüm proje kodu ve varsayılan modeller **%100 Apache 2.0** lisanslıdır.
 
 ## Öne Çıkan Özellikler
 
-- **Claude Code Tarzı 24-bit Terminal Kodlama Ajanı (`v0.4.0` · `.\agent.cmd` / `.\picocode.cmd agent`):**
-  - Zengin 24-bit TrueColor TUI (`scripts/tui.py` + `scripts/agent_cli.py`): yuvarlak kutulu 2 sütunlu karşılama kartı + degrade `PICOCODE` logosu, animasyonlu braille spinner (`⠋`), canlı sözdizimi renklendirmeli Markdown akışı, `● Tool(args)` / `⎿` ağaç kartları ve kırmızı/yeşil Diff Kutuları.
-  - Etkileşimli `❯` komut kutusu: `/` komut ve `@dosya` açılır otomatik tamamlama, kalıcı komut geçmişi (`↑`/`↓`), alt durum şeridi (`mod · model · git branch · ctx%`) ve `Ctrl+C` ile sadece aktif yanıtı iptal etme.
-  - 16 adımlı döngü + 9 güvenli araç (`repo_map`, `list_files`, `read_file`, `search_code`, `git_status`, `git_diff`, `edit_file`, `write_file`, `run_command`), anlık Python/JSON sözdizimi kontrolü, `[e] Çalıştır · [h] Hep izin ver · [Enter] İptal` onay kartı, `/undo` geri alma ve otomatik `llama-server` başlatma.
+- **Claude Code Tarzı 24-bit Terminal Kodlama Ajanı (`v0.5.0` · `.\agent.cmd` / `.\picocode.cmd agent`):**
+  - **Klasör Güven Onayı (`Trust Folder`) & Etkileşimli Proje Seçici (`/project` / `/cd`):** `.\agent.cmd` komutu argümansız açıldığında proje seçtirir, ilk girişte güven onayı (`Güven` / `Salt-okunur Plan` / `Çık`) sorar ve oturum içinde modeli kapatmadan **0 saniyede** proje değiştirir.
+  - **Dosya Gezgini, Bağlam Sabitleme & Canlı Model Değiştirme:** `/files`, `/add <dosya>` (`Tab`), `/drop`, `@dosya` otomatik tamamlama ve sohbeti kaybetmeden `/model inkling` ↔ `/model qwen` geçişi.
+  - Zengin 24-bit TrueColor TUI (`scripts/tui.py` + `scripts/agent_cli.py`): yuvarlak kutulu 2 sütunlu karşılama kartı + degrade `PICOCODE` logosu, animasyonlu braille spinner (`⠋`), canlı sözdizimi renklendirmeli Markdown akışı, `● Tool(args)` / `⎿` ağaç kartları, kırmızı/yeşil Diff Kutuları ve alt durum şeridi (`mod · model · proje · git · sabit · ctx%`).
 - **Tek Tıkla Sıfır Derlemeli Kurulum (`.\setup.cmd`):** Visual Studio veya C++ Build Tools gerektirmez! Resmi derlenmiş `llama.cpp b12807` Win64 **Vulkan** veya **CUDA 12.4** motorunu ve doğrulanmış GGUF modellerini otomatik kurar.
 - **Adaptif Hibrit GPU+RAM MoE + 0 MB VRAM Kayıpsız `ngram-mod` (`v0.2.0`):**
   - Başlatmadan önce canlı boş Dedicated VRAM'i ölçer; `650 MiB` taşma güvenliği bırakarak **`4–6` MoE uzman katmanını doğrudan 6 GB GDDR6'ya (`--n-cpu-moe N`)** alır ve tam **`32K` `q8_0` KV önbelleğini** VRAM'de tutar.

@@ -72,11 +72,16 @@ except ImportError:
 
 
 SLASH_COMMANDS: list[tuple[str, str]] = [
+    ("/project", "Proje klasörü seç, değiştir veya yeni oluştur (/project StarForge)"),
+    ("/trust", "Güvenilen klasörleri yönet (/trust | /trust add | /trust remove)"),
+    ("/files", "Aktif projedeki dosyaları listele (/files [alt_klasör])"),
+    ("/add", "Dosyayı sohbet bağlamına sabitle (/add dosya.py · Tab)"),
+    ("/drop", "Sabitlenmiş dosyaları bağlamdan çıkar (/drop [dosya.py])"),
     ("/model", "Kurulu modelleri gör veya canlı değiştir (/model inkling2-mini)"),
     ("/plan", "Salt-okunur Plan Modu aç / kapat"),
     ("/diff", "Çalışma dizinindeki Git diff özetini göster"),
     ("/undo", "Son turdaki tüm dosya değişikliklerini geri al"),
-    ("/status", "Model, bağlam penceresi, Git ve durum özeti"),
+    ("/status", "Model, proje, güven, bağlam ve Git özeti"),
     ("/yes", "Kabuk komutları için otomatik onayı aç / kapat"),
     ("/clear", "Sohbet geçmişini sıfırla ve ekranı temizle"),
     ("/help", "Komut listesini ve kısayolları göster"),
@@ -122,20 +127,25 @@ def format_tool_arg_preview(name: str, args: dict[str, Any]) -> str:
 
 if HAS_PT:
     class PicoCompleter(Completer):
-        """Interactive dropdown autocomplete for `/` slash commands, `/model <id>`, and `@file` references."""
+        """Interactive dropdown autocomplete for `/`, `/model`, `/project`, `/add`, `/drop`, and `@file`."""
 
         def __init__(
             self,
             get_files_fn: Callable[[], list[str]],
             get_models_fn: Callable[[], list[dict[str, Any]]] | None = None,
+            get_projects_fn: Callable[[], list[dict[str, Any]]] | None = None,
+            get_pinned_fn: Callable[[], list[str]] | None = None,
         ) -> None:
             self._get_files = get_files_fn
             self._get_models = get_models_fn or (lambda: [])
+            self._get_projects = get_projects_fn or (lambda: [])
+            self._get_pinned = get_pinned_fn or (lambda: [])
 
         def get_completions(self, document, complete_event):
             text = document.text_before_cursor
+            low = text.lower()
             # 1) `/model <id>` sub-completion
-            if text.lower().startswith("/model "):
+            if low.startswith("/model "):
                 partial = text[7:].strip().lower()
                 for m in self._get_models():
                     mid = str(m.get("id") or "")
@@ -148,14 +158,48 @@ if HAS_PT:
                             display_meta=f"{tag} · {m.get('short', '')}",
                         )
                 return
-            # 2) Slash commands at start of line
+            # 2) `/project <name>` or `/cd <name>` sub-completion
+            for pref in ("/project ", "/cd "):
+                if low.startswith(pref):
+                    raw_arg = text[len(pref):]
+                    partial = raw_arg.strip().lower()
+                    for p in self._get_projects():
+                        pname = str(p.get("name") or "")
+                        if partial in pname.lower():
+                            meta = ("✓ güvenli" if p.get("trusted") else "yeni") + (" · git" if p.get("is_git") else "")
+                            yield Completion(
+                                pname,
+                                start_position=-len(raw_arg),
+                                display=pname,
+                                display_meta=meta,
+                            )
+                    return
+            # 3) `/add <file>` sub-completion
+            if low.startswith("/add "):
+                raw_arg = text[5:]
+                ql = raw_arg.strip().lower()
+                files = self._get_files()
+                matches = [f for f in files if ql in f.lower()]
+                matches.sort(key=lambda f: (not f.lower().startswith(ql), len(f)))
+                for f in matches[:18]:
+                    yield Completion(f, start_position=-len(raw_arg), display=f, display_meta="bağlama sabitle")
+                return
+            # 4) `/drop <file>` sub-completion
+            if low.startswith("/drop "):
+                raw_arg = text[6:]
+                ql = raw_arg.strip().lower()
+                for f in self._get_pinned():
+                    if ql in f.lower():
+                        yield Completion(f, start_position=-len(raw_arg), display=f, display_meta="bağlamdan çıkar")
+                return
+            # 5) Slash commands at start of line
             if text.startswith("/") and " " not in text:
-                q = text.lower()
+                q = low
                 for cmd, desc in SLASH_COMMANDS:
                     if cmd.startswith(q):
                         yield Completion(cmd, start_position=-len(text), display=cmd, display_meta=desc)
                 return
-            # 3) @file reference anywhere in prompt
+            # 6) @file reference anywhere in prompt
             at_pos = text.rfind("@")
             if at_pos != -1 and (at_pos == 0 or text[at_pos - 1].isspace()):
                 partial = text[at_pos + 1:]
@@ -180,12 +224,16 @@ class TerminalUI:
         self,
         get_files_fn: Callable[[], list[str]] | None = None,
         get_models_fn: Callable[[], list[dict[str, Any]]] | None = None,
+        get_projects_fn: Callable[[], list[dict[str, Any]]] | None = None,
+        get_pinned_fn: Callable[[], list[str]] | None = None,
     ) -> None:
         init_windows_console()
         self.rich_enabled = HAS_RICH
         self.console = Console(highlight=False) if HAS_RICH else None
         self._get_files = get_files_fn or (lambda: [])
         self._get_models = get_models_fn or (lambda: [])
+        self._get_projects = get_projects_fn or (lambda: [])
+        self._get_pinned = get_pinned_fn or (lambda: [])
         self._session = None
         if HAS_PT and sys.stdin.isatty():
             hist_path = pathlib.Path.home() / ".picocode_agent_history"
@@ -204,7 +252,7 @@ class TerminalUI:
             })
             self._session = PromptSession(
                 history=FileHistory(str(hist_path)),
-                completer=PicoCompleter(self._get_files, self._get_models),
+                completer=PicoCompleter(self._get_files, self._get_models, self._get_projects, self._get_pinned),
                 complete_while_typing=True,
                 style=style,
             )
@@ -226,6 +274,8 @@ class TerminalUI:
         git_changes: int,
         plan_only: bool,
         auto_approve: bool,
+        trusted: bool = True,
+        ctx_limit: int = 32768,
     ) -> None:
         if not self.console:
             print(f"PicoCode {version} | {model} | {workspace_path}")
@@ -246,17 +296,18 @@ class TerminalUI:
         mode_str = "[bold #f59e0b]◐ PLAN (salt-okunur)[/]" if plan_only else "[bold #22c55e]● AGENT (16 adım)[/]"
         if auto_approve:
             mode_str += "  [bold #38bdf8]⚡ --yes[/]"
+        trust_tag = "[#22c55e]🔒 Güvenli[/]" if trusted else "[#f59e0b]⚠ Salt-Okunur[/]"
         git_str = f"[#a78bfa]⎇ {git_branch}[/]" if git_branch else "[#64748b]git yok[/]"
         if git_branch:
             git_str += f"  [#f59e0b]({git_changes} değişiklik)[/]" if git_changes else "  [#22c55e](temiz)[/]"
 
-        meta.add_row("Model", f"[bold #38bdf8]{model}[/]  [#64748b](32K ctx · ngram-mod)[/]")
-        meta.add_row("Proje", f"[bold #f8fafc]{workspace_name}[/]  [#64748b]{workspace_path}[/]")
+        meta.add_row("Model", f"[bold #38bdf8]{model}[/]  [#64748b]({ctx_limit // 1024}K ctx)[/]")
+        meta.add_row("Proje", f"[bold #f8fafc]{workspace_name}[/]  {trust_tag}  [#64748b]{workspace_path}[/]")
         meta.add_row("Git", git_str)
         meta.add_row("Mod", mode_str)
         meta.add_row(
             "Kısayol",
-            "[#38bdf8]/model[/]  [#38bdf8]/plan[/]  [#38bdf8]/diff[/]  [#38bdf8]/undo[/]  [#38bdf8]@dosya[/]  [#64748b]· Tab tamamla · Ctrl+C iptal[/]",
+            "[#38bdf8]/project[/]  [#38bdf8]/model[/]  [#38bdf8]/files[/]  [#38bdf8]/add[/]  [#38bdf8]/plan[/]  [#38bdf8]/undo[/]  [#64748b]· Tab tamamla[/]",
         )
 
         grid = Table.grid(expand=True, padding=(0, 2))
@@ -281,11 +332,13 @@ class TerminalUI:
         self,
         *,
         model: str,
-        git_branch: str,
-        ctx_tokens: int,
-        ctx_limit: int,
-        plan_only: bool,
-        auto_approve: bool,
+        workspace_name: str = "",
+        git_branch: str = "",
+        ctx_tokens: int = 0,
+        ctx_limit: int = 32768,
+        plan_only: bool = False,
+        auto_approve: bool = False,
+        pinned_count: int = 0,
     ) -> str:
         pct = min(100, int(round((ctx_tokens / max(1, ctx_limit)) * 100)))
         k_str = f"{ctx_tokens / 1000:.1f}k" if ctx_tokens >= 1000 else str(ctx_tokens)
@@ -298,16 +351,18 @@ class TerminalUI:
             mode_cls = "bottom-toolbar.warn" if plan_only else "bottom-toolbar.ok"
             mode_lbl = "PLAN" if plan_only else "AGENT"
             yes_lbl = " · YES" if auto_approve else ""
-            branch_part = f"  <sep>│</sep>  ⎇ {git_branch}" if git_branch else ""
+            proj_part = f"  <bottom-toolbar.sep>│</bottom-toolbar.sep>  📁 {workspace_name}" if workspace_name else ""
+            branch_part = f"  <bottom-toolbar.sep>│</bottom-toolbar.sep>  ⎇ {git_branch}" if git_branch else ""
+            pin_part = f"  <bottom-toolbar.sep>│</bottom-toolbar.sep>  <bottom-toolbar.key>📎 {pinned_count}</bottom-toolbar.key>" if pinned_count else ""
             ctx_cls = "bottom-toolbar.warn" if pct >= 65 else "bottom-toolbar.key"
 
             def _toolbar():
                 return HTML(
                     f" <{mode_cls}>● {mode_lbl}{yes_lbl}</{mode_cls}>"
                     f"  <bottom-toolbar.sep>│</bottom-toolbar.sep>  <bottom-toolbar.key>{model}</bottom-toolbar.key>"
-                    f"{branch_part.replace('<sep>', '<bottom-toolbar.sep>').replace('</sep>', '</bottom-toolbar.sep>')}"
+                    f"{proj_part}{branch_part}{pin_part}"
                     f"  <bottom-toolbar.sep>│</bottom-toolbar.sep>  ctx <{ctx_cls}>{k_str} ({pct}%)</{ctx_cls}>"
-                    f"  <bottom-toolbar.sep>│</bottom-toolbar.sep>  /help · @dosya · Tab tamamla"
+                    f"  <bottom-toolbar.sep>│</bottom-toolbar.sep>  /project · /model · /add"
                 )
 
             rprompt = HTML("<rprompt>Ctrl+C çıkış</rprompt>")
@@ -381,6 +436,151 @@ class TerminalUI:
                 tbl,
                 title="[bold #38bdf8]✦ Yerel Kodlama Modelleri[/]",
                 subtitle="[#64748b]Canlı geçiş: /model inkling2-mini  veya  /model qwen3-coder-30b[/]",
+                border_style="#334155",
+                box=box.ROUNDED,
+            )
+        )
+
+    def prompt_trust_folder(self, folder_path: str) -> str:
+        """Claude-Code-style Folder Trust gate. Returns 'trust', 'plan', or 'deny'."""
+        if self.console:
+            body = Text()
+            body.append(f"{folder_path}\n\n", style="bold #f8fafc")
+            body.append(
+                "PicoCode bu klasördeki dosyaları okuyabilir, düzenleyebilir ve onayınızla kabuk komutları çalıştırabilir.\n"
+                "Bu klasördeki dosya ve komutlara güveniyor musunuz?\n\n",
+                style="#cbd5e1",
+            )
+            body.append("  [1] ", style="bold #22c55e")
+            body.append("Evet, bu klasöre güven ve hatırla ", style="bold #e2e8f0")
+            body.append("(Enter)\n", style="#64748b")
+            body.append("  [2] ", style="bold #f59e0b")
+            body.append("Sadece bu oturumda salt-okunur Plan Modunda aç\n", style="#e2e8f0")
+            body.append("  [3] ", style="bold #ef4444")
+            body.append("Hayır, vazgeç", style="#e2e8f0")
+            self.console.print()
+            self.console.print(
+                Panel(
+                    body,
+                    title="[bold #f59e0b]🔒 Klasör Güven Onayı (Trust Folder)[/]",
+                    title_align="left",
+                    border_style="#f59e0b",
+                    box=box.ROUNDED,
+                    padding=(0, 1),
+                )
+            )
+        else:
+            print(f"\n[TRUST FOLDER] {folder_path}\n  [1] Evet, güven (Enter)\n  [2] Salt-okunur (/plan)\n  [3] Vazgeç")
+        try:
+            ans = input("  Seçiminiz [1/2/3]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return "deny"
+        if ans in ("", "1", "y", "yes", "e", "evet"):
+            return "trust"
+        if ans in ("2", "p", "plan"):
+            return "plan"
+        return "deny"
+
+    def pick_project_interactive(
+        self,
+        projects: list[dict[str, Any]],
+        current_path: str,
+        *,
+        title: str = "📁 Proje Klasörü Seçin",
+    ) -> str | None:
+        """Interactive numbered project selector. Returns chosen path, 'new:<name>', or None (cancel/keep)."""
+        if self.console:
+            tbl = Table(box=box.ROUNDED, border_style="#334155", padding=(0, 1))
+            tbl.add_column("#", style="bold #38bdf8", justify="right", no_wrap=True)
+            tbl.add_column("Proje", style="bold #f8fafc", no_wrap=True)
+            tbl.add_column("Durum", no_wrap=True)
+            tbl.add_column("Yol", style="#64748b")
+            for idx, p in enumerate(projects, 1):
+                is_cur = os.path.normcase(p["path"]) == os.path.normcase(current_path)
+                tags = []
+                if is_cur:
+                    tags.append("[bold #22c55e]● Aktif[/]")
+                elif p.get("trusted"):
+                    tags.append("[#22c55e]🔒 Güvenli[/]")
+                else:
+                    tags.append("[#f59e0b]○ Yeni[/]")
+                if p.get("is_git"):
+                    tags.append("[#a78bfa]⎇ git[/]")
+                tbl.add_row(str(idx), p["name"], " ".join(tags), p["path"])
+            self.console.print()
+            self.console.print(
+                Panel(
+                    tbl,
+                    title=f"[bold #38bdf8]{title}[/]",
+                    subtitle="[#64748b]Numara / proje adı / tam yol yazın · yeni klasör için `new <ad>` · Enter = mevcut[/]",
+                    border_style="#2563eb",
+                    box=box.ROUNDED,
+                )
+            )
+        else:
+            print(f"\n{title}")
+            for idx, p in enumerate(projects, 1):
+                print(f"  {idx}. {p['name']} ({p['path']})")
+        try:
+            raw = input("  Proje seçimi (Enter=mevcut): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return None
+        if not raw:
+            return None
+        if raw.lower().startswith("new "):
+            return "new:" + raw[4:].strip()
+        if raw.isdigit():
+            i = int(raw) - 1
+            if 0 <= i < len(projects):
+                return projects[i]["path"]
+        for p in projects:
+            if p["name"].lower() == raw.lower():
+                return p["path"]
+        return raw
+
+    def print_files_table(self, files: list[tuple[str, int]], pinned: list[str], subdir: str = "") -> None:
+        if not self.console:
+            for rel, sz in files[:60]:
+                pin = " [PIN]" if rel in pinned else ""
+                print(f"  {rel} ({sz} B){pin}")
+            return
+        tbl = Table(box=box.ROUNDED, border_style="#334155", padding=(0, 1))
+        tbl.add_column("Dosya", style="#e2e8f0")
+        tbl.add_column("Boyut", justify="right", style="#64748b", no_wrap=True)
+        tbl.add_column("Bağlam", no_wrap=True)
+        for rel, sz in files[:45]:
+            sz_str = f"{sz / 1024:.1f} KB" if sz >= 1024 else f"{sz} B"
+            pin = "[bold #38bdf8]📎 Sabit[/]" if rel in pinned else "[#475569]—[/]"
+            tbl.add_row(rel, sz_str, pin)
+        extra = f" · ilk 45/{len(files)} dosya" if len(files) > 45 else f" · {len(files)} dosya"
+        sub_lbl = f" ({subdir})" if subdir else ""
+        self.console.print(
+            Panel(
+                tbl,
+                title=f"[bold #38bdf8]📂 Proje Dosyaları{sub_lbl}[/]",
+                subtitle=f"[#64748b]Bağlama ekle: /add <dosya> (Tab) · çıkar: /drop{extra}[/]",
+                border_style="#334155",
+                box=box.ROUNDED,
+            )
+        )
+
+    def print_trusted_table(self, folders: list[str], current_path: str) -> None:
+        if not self.console:
+            print("Trusted folders:", folders)
+            return
+        tbl = Table(box=box.ROUNDED, border_style="#334155", show_header=False, padding=(0, 1))
+        tbl.add_column("State", no_wrap=True)
+        tbl.add_column("Path", style="#e2e8f0")
+        if not folders:
+            tbl.add_row("[#64748b]—[/]", "[#64748b]Henüz güvenilen klasör yok.[/]")
+        for f in folders:
+            cur = "[bold #22c55e]● Aktif[/]" if os.path.normcase(f) == os.path.normcase(current_path) else "[#38bdf8]🔒[/]"
+            tbl.add_row(cur, f)
+        self.console.print(
+            Panel(
+                tbl,
+                title="[bold #22c55e]🔒 Güvenilen Klasörler (~/.picocode_trusted_folders.json)[/]",
+                subtitle="[#64748b]Kaldırmak için: /trust remove  ·  eklemek için: /trust add[/]",
                 border_style="#334155",
                 box=box.ROUNDED,
             )
