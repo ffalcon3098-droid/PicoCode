@@ -434,13 +434,13 @@ def run_benchmark(cmd: list[str], plan: dict[str, Any], host: str, port: int, ma
 
     try:
         if not wait_for_health(host, port, proc, timeout_s=240.0):
-            print("\nHATA: llama-server hazir duruma gelemedi! Son log satirlari:", file=sys.stderr)
+            print("\nERROR: llama-server failed to become ready! Last log lines:", file=sys.stderr)
             for ln in log_lines[-25:]:
                 print("  " + ln, file=sys.stderr)
             return 1
 
         load_s = time.monotonic() - t_start
-        print(f"\n[PicoCode Bench] Sunucu hazir ({load_s:.1f}s). Kodlama promptu gonderiliyor...")
+        print(f"\n[PicoCode Bench] Server ready ({load_s:.1f}s). Sending coding benchmark prompt...")
 
         payload = {
             "model": plan["model_id"],
