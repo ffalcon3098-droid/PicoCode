@@ -67,6 +67,8 @@
       "draft_n_max": 6,
       "mmproj_file": "inkling2_mini_mmproj_q8",
       "moe_cpu_mode": "cpu_moe",
+      "batch_size_override": 1024,
+      "ubatch_size_override": 512,
       "defaults": {
         "ctx_size_6gb": 16384,
         "ctx_size_8gb": 32768,

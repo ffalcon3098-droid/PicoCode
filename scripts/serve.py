@@ -252,7 +252,7 @@ def build_server_command(
     batch_size = int(mcfg.get("batch_size_override") or (512 if (backend == "vulkan" or vram_gib <= 6.8) else 1024))
     ubatch_size = int(mcfg.get("ubatch_size_override") or (256 if (backend == "vulkan" or vram_gib <= 6.8) else 512))
     chosen_threads = int(threads) if threads else compute_optimal_threads(cpu_threads)
-    batch_threads = cpu_threads if mcfg.get("moe_cpu_mode") == "hybrid_moe" else min(cpu_threads, max(chosen_threads, cpu_threads - 1))
+    batch_threads = cpu_threads if arch in ("moe", "moe_looped") else min(cpu_threads, max(chosen_threads, cpu_threads - 1))
 
     cmd = [
         exe_str,
@@ -326,6 +326,8 @@ def build_server_command(
     eff_rb = reasoning_budget if reasoning_budget is not None else defaults.get("reasoning_budget")
     if eff_rb is not None:
         cmd += ["--reasoning-budget", str(int(eff_rb))]
+    if arch == "moe_looped":
+        cmd += ["--no-reasoning-preserve"]
 
     # 5. Optional Vision projector (mmproj)
     vision_active = None

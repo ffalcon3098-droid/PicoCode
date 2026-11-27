@@ -76,8 +76,10 @@ class TestPicoCodeSuite(unittest.TestCase):
         self.assertIn("--spec-draft-n-max", cmd)
         self.assertIn("-md", cmd)
         self.assertIn("--mmproj", cmd)
+        self.assertIn("--no-reasoning-preserve", cmd)
         self.assertEqual(plan["threads"], 6)
-        self.assertEqual(plan["ubatch_size"], 256)
+        self.assertEqual(plan["batch_size"], 1024)
+        self.assertEqual(plan["ubatch_size"], 512)
         self.assertEqual(plan["ctx_size"], 16384)
         self.assertIsNone(plan["warning"])
 

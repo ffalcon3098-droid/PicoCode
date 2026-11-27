@@ -52,14 +52,15 @@ VERSION = "0.6.0"
 
 IGNORE_DIRS = {
     ".git", "__pycache__", "node_modules", ".venv", "venv",
-    "models", "engine", "build", "dist", ".pytest_cache", ".mypy_cache",
+    "models", "engine", "build", "dist", "target", ".next", ".nuxt",
+    "coverage", "out", ".turbo", ".pytest_cache", ".mypy_cache",
 }
 TEXT_EXTS = {
-    ".py", ".js", ".ts", ".tsx", ".jsx", ".html", ".css", ".json", ".md",
+    ".py", ".js", ".ts", ".tsx", ".jsx", ".mjs", ".cjs", ".html", ".css", ".json", ".md",
     ".txt", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".cmd", ".bat", ".ps1",
     ".sh", ".sql", ".csv", ".xml", ".c", ".cpp", ".h", ".hpp", ".rs", ".go",
 }
-CODE_EXTS = {".py", ".js", ".jsx", ".ts", ".tsx"}
+CODE_EXTS = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".rs", ".go"}
 
 _DANGEROUS_PATTERNS = [
     re.compile(r"\brm\s+[^\n]*(-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r|-r\b[^\n]*-f\b|-f\b[^\n]*-r\b)", re.I | re.S),
@@ -112,8 +113,34 @@ def extract_code_symbols(rel_path: str, content: str) -> list[str]:
             return out
         except SyntaxError:
             pass
+    if ext == ".rs":
+        prev_tauri = False
+        for idx, ln in enumerate(content.splitlines(), 1):
+            st = ln.strip()
+            if "#[tauri::command" in st:
+                prev_tauri = True
+                continue
+            m = re.match(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(fn|struct|enum|trait|mod)\s+([A-Za-z_]\w*)", ln)
+            if m:
+                tag = " [tauri::cmd]" if (prev_tauri and m.group(1) == "fn") else ""
+                out.append(f"  L{idx} {m.group(1)} {m.group(2)}{tag}")
+                prev_tauri = False
+                continue
+            if st and not st.startswith("#[") and not st.startswith("//"):
+                prev_tauri = False
+        return out
+    if ext == ".go":
+        for idx, ln in enumerate(content.splitlines(), 1):
+            m = re.match(r"^\s*func\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)", ln)
+            if m:
+                out.append(f"  L{idx} func {m.group(1)}")
+                continue
+            m2 = re.match(r"^\s*type\s+([A-Za-z_]\w*)\s+(struct|interface)\b", ln)
+            if m2:
+                out.append(f"  L{idx} {m2.group(2)} {m2.group(1)}")
+        return out
     for idx, ln in enumerate(content.splitlines(), 1):
-        m = re.match(r"^\s*(?:export\s+)?(?:async\s+)?(function|class|interface)\s+([A-Za-z_$][\w$]*)", ln)
+        m = re.match(r"^\s*(?:export\s+(?:default\s+)?)?(?:async\s+)?(function|class|interface|type)\s+([A-Za-z_$][\w$]*)", ln)
         if m:
             out.append(f"  L{idx} {m.group(1)} {m.group(2)}")
             continue
@@ -121,6 +148,72 @@ def extract_code_symbols(rel_path: str, content: str) -> list[str]:
         if m2:
             out.append(f"  L{idx} fn {m2.group(1)}")
     return out
+
+
+def build_project_overview(ws: AgentWorkspace, max_chars: int = 3800) -> str:
+    """Build a compact 1-shot architecture & hotspot summary (manifests, dir counts, largest source files)."""
+    files = ws.walk_files(max_depth=5, max_items=600)
+    dir_counts: dict[str, int] = {}
+    ext_counts: dict[str, int] = {}
+    code_files: list[tuple[int, str, int]] = []
+    for rel, sz in files:
+        parts = rel.split("/")
+        top = parts[0] + "/" if len(parts) > 1 else "(root)"
+        dir_counts[top] = dir_counts.get(top, 0) + 1
+        ext = pathlib.Path(rel).suffix.lower() or "(no-ext)"
+        ext_counts[ext] = ext_counts.get(ext, 0) + 1
+        if ext in CODE_EXTS and sz <= 300_000 and ".test." not in rel.lower() and "__tests__" not in rel.lower():
+            try:
+                n_lines = (ws.root / rel).read_text(encoding="utf-8", errors="replace").count("\n") + 1
+            except OSError:
+                n_lines = max(1, sz // 40)
+            code_files.append((n_lines, rel, sz))
+
+    lines: list[str] = [f"Project Overview: `{ws.root.name}` ({len(files)} files indexed)"]
+    top_dirs = ", ".join(f"{k}({v})" for k, v in sorted(dir_counts.items(), key=lambda x: -x[1])[:10])
+    top_exts = ", ".join(f"{k}:{v}" for k, v in sorted(ext_counts.items(), key=lambda x: -x[1])[:10])
+    lines.append(f"Directories: {top_dirs}")
+    lines.append(f"Languages/Exts: {top_exts}")
+
+    # Compact manifests (package.json, Cargo.toml, pyproject.toml, README)
+    pkg_p = ws.root / "package.json"
+    if pkg_p.is_file():
+        try:
+            pkg = json.loads(pkg_p.read_text(encoding="utf-8", errors="replace"))
+            deps = list((pkg.get("dependencies") or {}).keys())[:15]
+            scripts = list((pkg.get("scripts") or {}).keys())[:10]
+            lines.append(f"package.json: name={pkg.get('name')} v{pkg.get('version')} | scripts={scripts} | deps={deps}")
+        except Exception:
+            pass
+    for cargo_rel in ("Cargo.toml", "src-tauri/Cargo.toml"):
+        cp = ws.root / cargo_rel
+        if cp.is_file():
+            try:
+                ctxt = cp.read_text(encoding="utf-8", errors="replace")
+                deps = re.findall(r"^([A-Za-z0-9_-]+)\s*=", ctxt[ctxt.find("[dependencies]"):] if "[dependencies]" in ctxt else "", re.M)[:20]
+                lines.append(f"{cargo_rel}: deps={deps}")
+            except Exception:
+                pass
+    pyp = ws.root / "pyproject.toml"
+    if pyp.is_file():
+        lines.append("pyproject.toml: present")
+    reqp = ws.root / "requirements.txt"
+    if reqp.is_file():
+        rdeps = [ln.strip() for ln in reqp.read_text(encoding="utf-8", errors="replace").splitlines() if ln.strip() and not ln.strip().startswith("#")][:12]
+        lines.append(f"requirements.txt: {rdeps}")
+    rdm = ws.root / "README.md"
+    if rdm.is_file():
+        rhead = "\n".join(rdm.read_text(encoding="utf-8", errors="replace").splitlines()[:12])[:550]
+        lines.append(f"README excerpt:\n{rhead}")
+
+    # Largest / core code files (best review hotspots!)
+    code_files.sort(key=lambda x: -x[0])
+    if code_files:
+        lines.append("Key/largest code files (lines):")
+        for nl, rel, _ in code_files[:28]:
+            lines.append(f"  - {rel} ({nl}L)")
+
+    return "\n".join(lines)[:max_chars]
 
 
 class AgentWorkspace:
@@ -226,6 +319,14 @@ AGENT_TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "project_overview",
+            "description": "Get a compact 1-shot project summary: tech stack manifests (package.json/Cargo.toml/README), directory/language breakdown, and largest core source files. Call this FIRST for project reviews.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "list_files",
             "description": "List entries in subdir ('' for workspace root).",
             "parameters": {"type": "object", "properties": {"subdir": {"type": "string"}}},
@@ -326,7 +427,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
     },
 ]
 
-READONLY_TOOLS = {"list_files", "read_file", "search_code", "repo_map", "git_status", "git_diff"}
+READONLY_TOOLS = {"project_overview", "list_files", "read_file", "search_code", "repo_map", "git_status", "git_diff"}
 READONLY_TOOL_SPECS = [t for t in AGENT_TOOLS if t["function"]["name"] in READONLY_TOOLS]
 
 
@@ -399,8 +500,12 @@ def execute_cli_tool(
     *,
     auto_approve: bool = False,
     confirm_fn: Any | None = None,
+    compact_budget: bool = False,
 ) -> tuple[str, dict[str, Any] | None]:
     try:
+        if name == "project_overview":
+            return build_project_overview(ws, max_chars=3600 if compact_budget else 5200), None
+
         if name == "list_files":
             sub = str(args.get("subdir") or "").strip()
             base = ws.safe_path(sub) if sub else ws.root
@@ -423,10 +528,12 @@ def execute_cli_tool(
             if not p.is_file():
                 return f"ERROR: File not found: {rel}", None
             all_lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+            default_win = 119 if compact_budget else 199
+            max_chars = 5200 if compact_budget else 9000
             s = max(1, int(args.get("start_line") or 1))
-            e = min(len(all_lines), int(args.get("end_line") or (s + 199)))
+            e = min(len(all_lines), int(args.get("end_line") or (s + default_win)))
             numbered = [f"{i}: {all_lines[i - 1]}" for i in range(s, e + 1)]
-            return f"File: {p.relative_to(ws.root).as_posix()} (lines {s}-{e} of {len(all_lines)})\n" + "\n".join(numbered)[:9000], None
+            return f"File: {p.relative_to(ws.root).as_posix()} (lines {s}-{e} of {len(all_lines)})\n" + "\n".join(numbered)[:max_chars], None
 
         if name == "search_code":
             q = str(args.get("query") or "").strip().lower()
@@ -463,8 +570,8 @@ def execute_cli_tool(
                 except OSError:
                     continue
                 syms = extract_code_symbols(rel, txt)
-                blk = f"{rel} ({txt.count(chr(10)) + 1}L):\n" + ("\n".join(syms[:30]) if syms else "  (no top-level symbols)")
-                if total + len(blk) > 7500:
+                blk = f"{rel} ({txt.count(chr(10)) + 1}L):\n" + ("\n".join(syms[:25 if compact_budget else 30]) if syms else "  (no top-level symbols)")
+                if total + len(blk) > (4600 if compact_budget else 7500):
                     blocks.append("... (truncated)")
                     break
                 blocks.append(blk)
@@ -696,6 +803,8 @@ def run_agent_turn(
     tok_count = 0
     session_auto_approve = auto_approve
     cancelled = False
+    has_final_answer = False
+    compact_budget = (ctx_limit <= 16384) or ("inkling" in (model or "").lower())
 
     def _confirm_cmd(cmd: str) -> bool:
         nonlocal session_auto_approve
@@ -711,18 +820,33 @@ def run_agent_turn(
         return False
 
     try:
-        for step in range(1, max_steps + 1):
+        for step in range(1, max_steps + 2):
             conv[:] = compact_messages(conv, ctx_limit=ctx_limit)
+            force_final = (step > max_steps) or (step >= 3 and estimate_tokens(conv) >= int(ctx_limit * 0.78))
+            if force_final:
+                if has_final_answer:
+                    break
+                conv.append({
+                    "role": "user",
+                    "content": (
+                        "İnceleme adımları tamamlandı. Başka araç çağırma; şimdiye kadar okuduğun gerçek dosyalara "
+                        "dayanarak net, somut, dosya adlarıyla desteklenmiş kapsamlı final yanıtını yaz."
+                    ),
+                })
             sampling = get_model_sampling_params(model)
-            payload = {
+            # Keep intermediate tool-selection thinking crisp on Inkling so reviews stay fast; full budget on final synthesis
+            if "reasoning_budget" in sampling and not force_final and step < max_steps:
+                sampling["reasoning_budget"] = min(int(sampling["reasoning_budget"]), 512)
+            payload: dict[str, Any] = {
                 "model": model,
                 "messages": conv,
-                "tools": tools_spec,
-                "tool_choice": "auto",
                 "max_tokens": 4096,
                 "stream": True,
                 **sampling,
             }
+            if not force_final:
+                payload["tools"] = tools_spec
+                payload["tool_choice"] = "auto"
             req = urllib.request.Request(
                 url, data=json.dumps(payload).encode("utf-8"),
                 headers={"Content-Type": "application/json", "Authorization": "Bearer picocode"},
@@ -735,7 +859,8 @@ def run_agent_turn(
             live = (ui.make_live_stream() if (ui is not None and not quiet) else None)
             if live is not None:
                 live.__enter__()
-                live.update(ui.render_spinner(f"Düşünüyor... (adım {step}/{max_steps})"))
+                lbl = "Final yanıt yazılıyor..." if force_final else f"Düşünüyor... (adım {step}/{max_steps})"
+                live.update(ui.render_spinner(lbl))
             try:
                 with urllib.request.urlopen(req, timeout=360) as resp:
                     last_draw = 0.0
@@ -806,11 +931,17 @@ def run_agent_turn(
                     ui.print_error(step_err)
                 break
 
+            if force_final:
+                conv.append({"role": "assistant", "content": "".join(step_text)})
+                has_final_answer = True
+                break
+
             if not tc_map:
                 allowed = READONLY_TOOLS if plan_only else {t["function"]["name"] for t in AGENT_TOOLS}
                 fb_calls = _extract_fallback_tool_calls("".join(step_text), step, allowed)
                 if not fb_calls:
                     conv.append({"role": "assistant", "content": "".join(step_text)})
+                    has_final_answer = True
                     break
                 tool_calls = fb_calls
             else:
@@ -851,6 +982,7 @@ def run_agent_turn(
                             ws, fn_name, parsed,
                             auto_approve=session_auto_approve,
                             confirm_fn=_confirm_cmd if ui is not None else None,
+                            compact_budget=compact_budget,
                         )
 
                     if chg:
@@ -942,15 +1074,17 @@ def _build_system_prompt(
     )
     if plan_only:
         return (
-            f"You are PicoCode Terminal Planning Agent. Workspace: `{ws.root.name}` (root: {', '.join(root_entries)}). "
-            "READ-ONLY PLAN MODE: do not modify files. Use `repo_map`, `read_file`, `search_code`, `git_status`, `git_diff` "
-            "when needed and produce a concise numbered plan in the user's language." + greeting_rule + rules + pinned_block
+            f"You are PicoCode Terminal Planning & Review Agent. Workspace: `{ws.root.name}` (root: {', '.join(root_entries)}). "
+            "READ-ONLY MODE: do not modify files. For project reviews or architecture questions, call `project_overview` FIRST "
+            "(1 compact call), then read 2-5 highest-risk source files with `read_file` or `search_code` (and `repo_map` for a subdir), "
+            "then stop calling tools and write a concrete, file-and-line-cited review or numbered plan in the user's language."
+            + greeting_rule + rules + pinned_block
         )
     return (
         f"You are PicoCode Terminal Coding Agent. Workspace: `{ws.root.name}` (root: {', '.join(root_entries)}). "
-        "When asked about the codebase or asked to make changes, use `repo_map` or `search_code` to inspect quickly, "
-        "`edit_file` for targeted changes, `write_file` for new files, and `run_command` to run tests. "
-        "Fix any `[SYNTAX ERROR]` immediately. Be concise; reply in the user's language." + greeting_rule + rules + pinned_block
+        "When reviewing or exploring a project, call `project_overview` FIRST, then inspect specific files with `read_file`, `repo_map`, or `search_code`. "
+        "Use `edit_file` for targeted changes, `write_file` for new files, and `run_command` to run tests. "
+        "Fix any `[SYNTAX ERROR]` immediately. Be concise and concrete; reply in the user's language." + greeting_rule + rules + pinned_block
     )
 
 
