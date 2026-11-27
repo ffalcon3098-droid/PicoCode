@@ -168,6 +168,8 @@ class TestPicoCodeSuite(unittest.TestCase):
         self.assertIn("ngram-mod", cmd)
         self.assertIn("--poll", cmd)
         self.assertIn("--cache-reuse", cmd)
+        self.assertIn("--load-mode", cmd)
+        self.assertEqual(cmd[cmd.index("--load-mode") + 1], "none")
         self.assertEqual(plan["batch_size"], 1024)
         self.assertEqual(plan["ubatch_size"], 256)
 

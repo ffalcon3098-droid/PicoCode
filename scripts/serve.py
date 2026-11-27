@@ -323,6 +323,12 @@ def build_server_command(
     if (moe_n_cpu is not None or moe_cpu_offload or moe_override) and not draft_active:
         cmd += ["--no-host"]
 
+    # Empirically benchmarked on 32GB RAM + Ryzen 5 5500 + RX 5600 XT:
+    # Qwen3-Coder-30B-A3B CPU-MoE with `--load-mode none` jumps +18.1% pp (82.5 -> 97.45 t/s) & +3.4% tg (19.57 -> 20.24 t/s).
+    ram_gib = float(hw.get("ram_total_gib") or 0.0)
+    if arch == "moe" and (moe_n_cpu is not None or moe_cpu_offload or moe_override) and ram_gib >= 28.0:
+        cmd += ["--load-mode", "none"]
+
     eff_rb = reasoning_budget if reasoning_budget is not None else defaults.get("reasoning_budget")
     if eff_rb is not None:
         cmd += ["--reasoning-budget", str(int(eff_rb))]
@@ -549,7 +555,9 @@ def main() -> int:
             allow_missing_files=args.dry_run,
         )
     except FileNotFoundError as exc:
-        print(f"HATA: {exc}\nModeli indirmek icin: py scripts\\download_models.py --profile {model_id}", file=sys.stderr)
+        prof_map = {"qwen3-coder-30b": "qwen3-coder", "qwen25-coder-7b": "starter-7b", "inkling2-mini": "inkling2-mini"}
+        prof_hint = prof_map.get(model_id, model_id)
+        print(f"HATA: {exc}\nModeli indirmek icin: py scripts\\download_models.py --profile {prof_hint}", file=sys.stderr)
         return 1
 
     if args.dry_run:

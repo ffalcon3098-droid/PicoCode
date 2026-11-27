@@ -1083,19 +1083,25 @@ def _build_system_prompt(
         " For simple greetings (e.g. 'hi', 'hello', 'merhaba', 'selam') or general chat that does not ask to inspect/edit code, "
         "reply briefly in 1-2 sentences WITHOUT calling any tools."
     )
+    review_rule = (
+        " EVIDENCE RULE: Before reporting any bug, security flaw, hardcoded secret, or missing validation, "
+        "verify the actual implementation/usage with `search_code` or `read_file` — NEVER judge from an import, "
+        "constant name, or struct definition alone, and distinguish test modules from production code."
+    )
     if plan_only:
         return (
             f"You are PicoCode Terminal Planning & Review Agent. Workspace: `{ws.root.name}` (root: {', '.join(root_entries)}). "
             "READ-ONLY MODE: do not modify files. For project reviews or architecture questions, call `project_overview` FIRST "
             "(1 compact call), then read 2-5 highest-risk source files with `read_file` or `search_code` (and `repo_map` for a subdir), "
             "then stop calling tools and write a concrete, file-and-line-cited review or numbered plan in the user's language."
-            + greeting_rule + rules + pinned_block
+            + review_rule + greeting_rule + rules + pinned_block
         )
     return (
         f"You are PicoCode Terminal Coding Agent. Workspace: `{ws.root.name}` (root: {', '.join(root_entries)}). "
         "When reviewing or exploring a project, call `project_overview` FIRST, then inspect specific files with `read_file`, `repo_map`, or `search_code`. "
         "Use `edit_file` for targeted changes, `write_file` for new files, and `run_command` to run tests. "
-        "Fix any `[SYNTAX ERROR]` immediately. Be concise and concrete; reply in the user's language." + greeting_rule + rules + pinned_block
+        "Fix any `[SYNTAX ERROR]` immediately. Be concise and concrete; reply in the user's language."
+        + review_rule + greeting_rule + rules + pinned_block
     )
 
 
