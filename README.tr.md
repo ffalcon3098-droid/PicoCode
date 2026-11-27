@@ -9,6 +9,10 @@
 
 Tüm proje kodu ve varsayılan modeller **%100 Apache 2.0** lisanslıdır.
 
+<p align="center">
+  <img src="docs/assets/terminal_showcase.svg" alt="PicoCode v0.7.0 Terminal Ajanı ve 6 GB VRAM Hibrit MoE Planı" width="100%">
+</p>
+
 ---
 
 ## AMD & NVIDIA GPU Uyumluluğu + Dürüst Donanım Katmanları

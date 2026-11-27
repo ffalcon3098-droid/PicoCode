@@ -9,6 +9,10 @@
 
 All bundled code and default models are **100% Apache 2.0**.
 
+<p align="center">
+  <img src="docs/assets/terminal_showcase.svg" alt="PicoCode v0.7.0 Terminal Agent & 6 GB VRAM Hybrid MoE Plan" width="100%">
+</p>
+
 ---
 
 ## AMD & NVIDIA GPU Compatibility + Honest Hardware Tiers
