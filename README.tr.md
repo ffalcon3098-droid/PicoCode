@@ -12,15 +12,14 @@
 Tüm proje kodu ve varsayılan modeller **%100 Apache 2.0** lisanslıdır.
 
 <p align="center">
-  <img src="docs/assets/terminal_live_bench.png" alt="PicoCode v0.7.0 Canlı 6 GB RX 5600 XT Vulkan Benchmark (Qwen3-Coder-30B-A3B), Donanım Telemetrisi ve Terminal Kodlama Ajanı" width="100%">
+  <img src="docs/assets/terminal_agent_tui.png" alt="PicoCode v0.7.0 6 GB AMD RX 5600 XT Vulkan Üzerinde Claude Code Tarzı 24-bit TrueColor Terminal Kodlama Ajanı (.\agent.cmd)" width="100%">
 </p>
 
-<details>
-<summary><b>Diğer Canlı Ekran Görüntüleri — PicoStudio 3 Panelli IDE + Kod Ajanı v3</b></summary>
-<p align="center">
-  <img src="docs/assets/ide_coding_agent.png" alt="6 GB VRAM üzerinde Qwen3-Coder-30B-A3B çalıştıran PicoStudio 3 Panelli Yerel Web IDE" width="100%">
-</p>
-</details>
+### Canlı Terminal Benchmark & Eşlikçi IDE Ekran Görüntüleri
+
+| Canlı 6 GB RX 5600 XT Vulkan Benchmark (`tok/s` ve VRAM) | PicoStudio 3 Panelli Yerel Web IDE |
+|---|---|
+| ![Canlı 6 GB Vulkan Benchmark](docs/assets/terminal_live_bench.png) | ![PicoStudio 3 Panelli Yerel Web IDE](docs/assets/ide_coding_agent.png) |
 
 ---
 
