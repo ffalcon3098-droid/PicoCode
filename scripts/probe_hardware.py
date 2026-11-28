@@ -142,7 +142,13 @@ def probe_live_vram_mib(*, force: bool = False) -> tuple[float | None, float | N
                 text=True, timeout=3, stderr=subprocess.DEVNULL,
             ).strip()
             if out:
-                result = (round(float(out.splitlines()[0].strip()), 1), 0.0)
+                vals = []
+                for ln in out.splitlines():
+                    s = ln.strip()
+                    if s:
+                        vals.append(float(s))
+                if vals:
+                    result = (round(sum(vals), 1), 0.0)
         except Exception:
             pass
 
@@ -231,6 +237,109 @@ def _probe_windows_registry_gpu() -> tuple[str | None, float | None]:
     return None, None
 
 
+def _parse_driver_tuple(ver: str | None) -> tuple[int, int] | None:
+    if not ver:
+        return None
+    m = re.search(r"(\d+)\.(\d+)", ver)
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def parse_nvidia_smi_rows(csv_text: str, *, os_name: str | None = None) -> dict[str, Any] | None:
+    """Parse one or more `nvidia-smi` CSV rows into an aggregated hardware summary.
+
+    Supports both 3-column (`name,memory.total,memory.free`) and 5-column
+    (`name,memory.total,memory.free,compute_cap,driver_version`) output.
+    Handles multi-GPU rigs (e.g. 3x RTX 3060 12GB -> 36 GiB total) and automatically
+    falls back to Vulkan on legacy Maxwell/pre-Pascal GPUs (`compute_cap < 6.0`) or
+    Windows drivers too old for CUDA 12.4 (`< 551.61`).
+    """
+    if not csv_text:
+        return None
+    names: list[str] = []
+    tot_mib = 0.0
+    free_mib = 0.0
+    caps: list[float] = []
+    driver_ver: str | None = None
+
+    for raw_ln in csv_text.splitlines():
+        ln = raw_ln.strip()
+        if not ln:
+            continue
+        parts = [p.strip() for p in ln.split(",")]
+        if len(parts) < 3:
+            continue
+        try:
+            tm = float(parts[1])
+            fm = float(parts[2])
+        except ValueError:
+            continue
+        names.append(parts[0])
+        tot_mib += tm
+        free_mib += fm
+        if len(parts) >= 4:
+            try:
+                caps.append(float(parts[3]))
+            except ValueError:
+                pass
+        if len(parts) >= 5 and parts[4] and parts[4].upper() != "[N/A]" and not driver_ver:
+            driver_ver = parts[4]
+
+    if not names or tot_mib <= 0.0:
+        return None
+
+    gpu_count = len(names)
+    if gpu_count == 1:
+        gpu_name = names[0]
+    elif len(set(names)) == 1:
+        gpu_name = f"{gpu_count}x {names[0]}"
+    else:
+        gpu_name = f"{names[0]} (+{gpu_count - 1} more)"
+
+    tot_g = round(tot_mib / 1024.0, 2)
+    free_g = round(free_mib / 1024.0, 2)
+    min_cc = min(caps) if caps else None
+    sys_os = os_name or platform.system()
+
+    backend = "cuda"
+    backend_note: str | None = None
+    drv_t = _parse_driver_tuple(driver_ver)
+    if min_cc is not None and min_cc < 6.0:
+        backend = "vulkan"
+        backend_note = (
+            f"Detected legacy NVIDIA GPU (compute capability {min_cc:.1f} < 6.0); "
+            "using Vulkan instead of CUDA 12.4 prebuilt binaries."
+        )
+    elif sys_os == "Windows" and drv_t is not None and drv_t < (551, 61):
+        backend = "vulkan"
+        backend_note = (
+            f"NVIDIA driver {driver_ver} is older than CUDA 12.4 minimum (551.61); "
+            "using Vulkan backend."
+        )
+    elif min_cc is not None and min_cc < 7.0:
+        backend_note = (
+            f"Detected Pascal NVIDIA GPU (compute capability {min_cc:.1f}); "
+            "auto-disabling CUDA Flash Attention for compatibility (use -Backend vulkan if needed)."
+        )
+
+    out: dict[str, Any] = {
+        "vendor": "NVIDIA",
+        "gpu_name": gpu_name,
+        "gpu_count": gpu_count,
+        "backend": backend,
+        "vram_total_gib": tot_g,
+        "live_used_ded_gib": round(max(0.0, tot_g - free_g), 2),
+        "live_free_ded_gib": free_g,
+        "vram_class": "4GB" if tot_g <= 4.5 else ("6GB" if tot_g <= 6.5 else ("8GB" if tot_g <= 10.0 else "16GB+")),
+    }
+    if min_cc is not None:
+        out["compute_cap"] = round(min_cc, 1)
+    if driver_ver:
+        out["driver_version"] = driver_ver
+    if backend_note:
+        out["backend_note"] = backend_note
+    return out
+
+
 def probe_hardware(target_dir: pathlib.Path | None = None) -> dict[str, Any]:
     ram_tot, ram_avail = probe_ram_gib()
     check_path = target_dir or pathlib.Path.cwd()
@@ -247,34 +356,29 @@ def probe_hardware(target_dir: pathlib.Path | None = None) -> dict[str, Any]:
         "disk_free_gib": round(disk.free / (1024**3), 2),
         "vendor": "Unknown",
         "gpu_name": "CPU Fallback",
+        "gpu_count": 1,
         "backend": "vulkan",
         "vram_total_gib": 6.0,
         "vram_class": "6GB",
     }
 
-    # 1. Check NVIDIA CUDA via nvidia-smi
+    # 1. Check NVIDIA CUDA via nvidia-smi (supports multi-GPU + compute_cap/driver guard)
     if shutil.which("nvidia-smi"):
-        try:
-            out = subprocess.check_output(
-                ["nvidia-smi", "--query-gpu=name,memory.total,memory.free", "--format=csv,noheader,nounits"],
-                text=True, timeout=4, stderr=subprocess.DEVNULL,
-            ).strip()
-            if out:
-                name, tot_m, free_m = [x.strip() for x in out.splitlines()[0].split(",")[:3]]
-                tot_g = round(float(tot_m) / 1024.0, 2)
-                free_g = round(float(free_m) / 1024.0, 2)
-                hw.update({
-                    "vendor": "NVIDIA",
-                    "gpu_name": name,
-                    "backend": "cuda",
-                    "vram_total_gib": tot_g,
-                    "live_used_ded_gib": round(max(0.0, tot_g - free_g), 2),
-                    "live_free_ded_gib": free_g,
-                    "vram_class": "4GB" if tot_g <= 4.5 else ("6GB" if tot_g <= 6.5 else ("8GB" if tot_g <= 10.0 else "16GB+")),
-                })
-                return hw
-        except Exception:
-            pass
+        for fields in (
+            "name,memory.total,memory.free,compute_cap,driver_version",
+            "name,memory.total,memory.free",
+        ):
+            try:
+                out = subprocess.check_output(
+                    ["nvidia-smi", f"--query-gpu={fields}", "--format=csv,noheader,nounits"],
+                    text=True, timeout=4, stderr=subprocess.DEVNULL,
+                ).strip()
+                parsed = parse_nvidia_smi_rows(out, os_name=hw["os"])
+                if parsed:
+                    hw.update(parsed)
+                    return hw
+            except Exception:
+                continue
 
     # 2. Check Windows Registry GPU info (instant, works even without Vulkan SDK!)
     reg_name, reg_gib = _probe_windows_registry_gpu()

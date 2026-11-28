@@ -23,7 +23,17 @@ function Refresh-Path {
 function Find-Python {
     foreach ($cmd in @("py", "python", "python3")) {
         $p = Get-Command $cmd -ErrorAction SilentlyContinue
-        if ($p) { return $cmd }
+        if (-not $p) { continue }
+        # Skip Windows Store App Execution Alias stubs that fail or open Microsoft Store
+        if ($p.Source -and $p.Source -like "*\WindowsApps\*") { continue }
+        try {
+            $ver = & $cmd --version 2>&1
+            if ($LASTEXITCODE -eq 0 -and ($ver -match "Python 3\.(\d+)")) {
+                if ([int]$Matches[1] -ge 10) { return $cmd }
+            }
+        } catch {
+            continue
+        }
     }
     return $null
 }

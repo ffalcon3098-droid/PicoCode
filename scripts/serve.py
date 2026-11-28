@@ -194,16 +194,27 @@ def build_server_command(
         chosen_ctx = int(defaults.get("ctx_size_4gb", 8192))
     elif vram_gib <= 6.8:
         chosen_ctx = int(defaults.get("ctx_size_6gb", 16384))
+    elif vram_gib <= 9.0:
+        # Keep 8 GB cards at <=32K by default so more MoE layers stay resident in GDDR6
+        chosen_ctx = min(int(defaults.get("ctx_size_8gb", 32768)), 32768)
     else:
         chosen_ctx = int(defaults.get("ctx_size_8gb", 32768))
 
-    # Guard against WDDM Shared VRAM thrashing when browser/desktop eats >1.5 GiB
+    # Guard against WDDM Shared VRAM thrashing when browser/desktop eats VRAM
     live_warning = None
     if live_free is not None and vram_gib <= 6.8 and float(live_free) < 3.6:
         capped = min(chosen_ctx, 8192)
         if capped < chosen_ctx:
             live_warning = (
                 f"Live free VRAM is low ({live_free:.2f} GiB) — capped context "
+                f"{chosen_ctx} -> {capped} to avoid WDDM Shared VRAM thrashing."
+            )
+            chosen_ctx = capped
+    elif live_free is not None and vram_gib <= 9.0 and float(live_free) < 4.5:
+        capped = min(chosen_ctx, 16384)
+        if capped < chosen_ctx:
+            live_warning = (
+                f"Live free VRAM is low ({live_free:.2f} GiB on {vram_gib:.0f} GB GPU) — capped context "
                 f"{chosen_ctx} -> {capped} to avoid WDDM Shared VRAM thrashing."
             )
             chosen_ctx = capped
@@ -243,10 +254,14 @@ def build_server_command(
             else:
                 ngl = 99
 
-    # 3. Flash attention, KV quantization & batching (RDNA1/Vulkan TDR safety)
+    # 3. Flash attention, KV quantization & batching (RDNA1/Vulkan TDR & legacy Pascal CUDA safety)
     fa_mode = flash_attn.lower()
     if fa_mode == "auto":
-        fa_mode = "on"
+        cc = hw.get("compute_cap")
+        if backend == "cuda" and cc is not None and float(cc) < 7.0:
+            fa_mode = "off"
+        else:
+            fa_mode = "on"
 
     # Keep ubatch moderate on Vulkan unless model explicitly verified at higher batch (e.g. Qwen3-Coder 2048/512)
     batch_size = int(mcfg.get("batch_size_override") or (512 if (backend == "vulkan" or vram_gib <= 6.8) else 1024))
@@ -325,8 +340,11 @@ def build_server_command(
 
     # Empirically benchmarked on 32GB RAM + Ryzen 5 5500 + RX 5600 XT:
     # Qwen3-Coder-30B-A3B CPU-MoE with `--load-mode none` jumps +18.1% pp (82.5 -> 97.45 t/s) & +3.4% tg (19.57 -> 20.24 t/s).
+    # Only enable `--load-mode none` when enough *available* physical RAM exists so we never OOM-crash under browser/IDE load.
     ram_gib = float(hw.get("ram_total_gib") or 0.0)
-    if arch == "moe" and (moe_n_cpu is not None or moe_cpu_offload or moe_override) and ram_gib >= 28.0:
+    ram_avail = hw.get("ram_avail_gib")
+    has_ram_headroom = (ram_avail is None) or (float(ram_avail) >= 18.5)
+    if arch == "moe" and (moe_n_cpu is not None or moe_cpu_offload or moe_override) and ram_gib >= 28.0 and has_ram_headroom:
         cmd += ["--load-mode", "none"]
 
     eff_rb = reasoning_budget if reasoning_budget is not None else defaults.get("reasoning_budget")

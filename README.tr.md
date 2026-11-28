@@ -12,8 +12,15 @@
 Tüm proje kodu ve varsayılan modeller **%100 Apache 2.0** lisanslıdır.
 
 <p align="center">
-  <img src="docs/assets/terminal_showcase.svg" alt="PicoCode v0.7.0 Terminal Ajanı ve 6 GB VRAM Hibrit MoE Planı" width="100%">
+  <img src="docs/assets/terminal_live_bench.png" alt="PicoCode v0.7.0 Canlı 6 GB RX 5600 XT Vulkan Benchmark (Qwen3-Coder-30B-A3B), Donanım Telemetrisi ve Terminal Kodlama Ajanı" width="100%">
 </p>
+
+<details>
+<summary><b>Diğer Canlı Ekran Görüntüleri — PicoStudio 3 Panelli IDE + Kod Ajanı v3</b></summary>
+<p align="center">
+  <img src="docs/assets/ide_coding_agent.png" alt="6 GB VRAM üzerinde Qwen3-Coder-30B-A3B çalıştıran PicoStudio 3 Panelli Yerel Web IDE" width="100%">
+</p>
+</details>
 
 ---
 

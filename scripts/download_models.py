@@ -256,6 +256,8 @@ def main() -> int:
 
     if args.install_engine:
         b = hw["backend"] if args.install_engine == "auto" else args.install_engine
+        if args.install_engine == "auto" and hw.get("backend_note"):
+            print(f"  [NOTE] {hw['backend_note']}")
         exe = install_llama_engine(reg, backend=b)
         if exe is None:
             return 1

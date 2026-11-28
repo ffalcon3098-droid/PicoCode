@@ -12,8 +12,15 @@
 All bundled code and default models are **100% Apache 2.0**.
 
 <p align="center">
-  <img src="docs/assets/terminal_showcase.svg" alt="PicoCode v0.7.0 Terminal Agent & 6 GB VRAM Hybrid MoE Plan" width="100%">
+  <img src="docs/assets/terminal_live_bench.png" alt="PicoCode v0.7.0 Live 6 GB RX 5600 XT Vulkan Benchmark (Qwen3-Coder-30B-A3B), Hardware Telemetry & Terminal Coding Agent" width="100%">
 </p>
+
+<details>
+<summary><b>More Live Screenshots — PicoStudio 3-Pane IDE + Coding Agent v3</b></summary>
+<p align="center">
+  <img src="docs/assets/ide_coding_agent.png" alt="PicoStudio 3-Pane Local Web IDE running Qwen3-Coder-30B-A3B on 6 GB VRAM" width="100%">
+</p>
+</details>
 
 ---
 

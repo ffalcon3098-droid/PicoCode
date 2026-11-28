@@ -414,6 +414,83 @@ class TestPicoCodeSuite(unittest.TestCase):
             httpd.shutdown()
             httpd.server_close()
 
+    def test_12_multi_gpu_legacy_cuda_fallback_and_8gb_guard(self) -> None:
+        # 1) Multi-GPU rig (3x RTX 3060 12 GB = 36 GiB total) -> aggregates VRAM & runs 30B MoE 100% GPU
+        smi_3x3060 = "\n".join([
+            "NVIDIA GeForce RTX 3060, 12288, 11800, 8.6, 566.36",
+            "NVIDIA GeForce RTX 3060, 12288, 12000, 8.6, 566.36",
+            "NVIDIA GeForce RTX 3060, 12288, 12000, 8.6, 566.36",
+        ])
+        hw_3x = probe_hardware.parse_nvidia_smi_rows(smi_3x3060, os_name="Windows")
+        assert hw_3x is not None
+        self.assertEqual(hw_3x["gpu_count"], 3)
+        self.assertEqual(hw_3x["gpu_name"], "3x NVIDIA GeForce RTX 3060")
+        self.assertEqual(hw_3x["vram_total_gib"], 36.0)
+        self.assertEqual(hw_3x["backend"], "cuda")
+        hw_3x.update({"cpu_threads": 16, "ram_total_gib": 32.0})
+        cmd_3x, plan_3x = serve.build_server_command(
+            "qwen3-coder-30b", hw_3x, self.reg, server_exe="llama-server.exe", allow_missing_files=True
+        )
+        self.assertIsNone(plan_3x["moe_cpu_override"])
+        self.assertNotIn("--cpu-moe", cmd_3x)
+        self.assertNotIn("--n-cpu-moe", cmd_3x)
+        self.assertEqual(plan_3x["ctx_size"], 65536)
+
+        # 2) Maxwell Quadro K1200 (sm_50) -> automatic Vulkan fallback (avoids CUDA 12.4 kernel crash)
+        hw_k1200 = probe_hardware.parse_nvidia_smi_rows(
+            "Quadro K1200, 4096, 3600, 5.0, 552.22", os_name="Windows"
+        )
+        assert hw_k1200 is not None
+        self.assertEqual(hw_k1200["backend"], "vulkan")
+        self.assertIn("compute capability 5.0", hw_k1200.get("backend_note", ""))
+
+        # 3) Windows driver < 551.61 -> automatic Vulkan fallback
+        hw_old_drv = probe_hardware.parse_nvidia_smi_rows(
+            "NVIDIA GeForce RTX 3060, 12288, 11500, 8.6, 536.99", os_name="Windows"
+        )
+        assert hw_old_drv is not None
+        self.assertEqual(hw_old_drv["backend"], "vulkan")
+        self.assertIn("551.61", hw_old_drv.get("backend_note", ""))
+
+        # 4) Tesla P40 24 GB (Pascal sm_61) -> stays CUDA (TCC compatible), disables FA automatically, 100% GPU
+        hw_p40 = probe_hardware.parse_nvidia_smi_rows(
+            "Tesla P40, 24576, 24000, 6.1, 552.22", os_name="Windows"
+        )
+        assert hw_p40 is not None
+        self.assertEqual(hw_p40["backend"], "cuda")
+        self.assertEqual(hw_p40["compute_cap"], 6.1)
+        hw_p40.update({"cpu_threads": 16, "ram_total_gib": 32.0})
+        cmd_p40, plan_p40 = serve.build_server_command(
+            "qwen3-coder-30b", hw_p40, self.reg, server_exe="llama-server.exe", allow_missing_files=True
+        )
+        self.assertEqual(plan_p40["flash_attn"], "off")
+        self.assertNotIn("-ctv", cmd_p40)
+        self.assertIsNone(plan_p40["moe_cpu_override"])
+
+        # 5) 8 GB GPU defaults to 32K (not 64K) and caps to 16K when live free VRAM < 4.5 GiB
+        hw_8gb_clean = {
+            "gpu_name": "RTX 4060", "backend": "cuda", "vram_total_gib": 8.0,
+            "live_free_ded_gib": 6.8, "cpu_threads": 12, "ram_total_gib": 32.0,
+        }
+        _, plan_8_clean = serve.build_server_command(
+            "qwen3-coder-30b", hw_8gb_clean, self.reg, server_exe="llama-server.exe", allow_missing_files=True
+        )
+        self.assertEqual(plan_8_clean["ctx_size"], 32768)
+
+        hw_8gb_busy = dict(hw_8gb_clean, live_free_ded_gib=3.9)
+        _, plan_8_busy = serve.build_server_command(
+            "qwen3-coder-30b", hw_8gb_busy, self.reg, server_exe="llama-server.exe", allow_missing_files=True
+        )
+        self.assertEqual(plan_8_busy["ctx_size"], 16384)
+        self.assertIsNotNone(plan_8_busy["warning"])
+
+        # 6) Low available RAM (< 18.5 GiB) skips `--load-mode none` to prevent malloc OOM crash
+        hw_low_avail = dict(hw_8gb_clean, ram_total_gib=32.0, ram_avail_gib=11.0)
+        cmd_low_avail, _ = serve.build_server_command(
+            "qwen3-coder-30b", hw_low_avail, self.reg, server_exe="llama-server.exe", allow_missing_files=True
+        )
+        self.assertNotIn("--load-mode", cmd_low_avail)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
